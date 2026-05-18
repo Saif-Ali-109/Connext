@@ -7,7 +7,6 @@ import { Send, ArrowLeft, Loader2, User as UserIcon, Lock, Check, CheckCheck, Pa
 import { uploadMedia, FileAttachment } from '../../lib/media';
 import MediaMessage from '../../components/chat/MediaMessage';
 import Link from 'next/link';
-import Navigation from '../../components/Navigation';
 import { useChatContract } from '../../hooks/useChatContract';
 import { useAccount } from 'wagmi';
 import { io, Socket } from 'socket.io-client';
@@ -90,7 +89,8 @@ const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 const [page, setPage] = useState(1);
 const [hasMore, setHasMore] = useState(true);
 const [loadingMore, setLoadingMore] = useState(false);
-const [isTyping, setIsTyping] = useState(false);
+const [isContactTyping, setIsContactTyping] = useState(false);
+const [isMeTyping, setIsMeTyping] = useState(false);
 const typingTimeoutRef = useRef<number | null>(null);
 const [contactOnline, setContactOnline] = useState(false);
 const { ensName: recipientENS } = useENS(recipientAddress);
@@ -208,6 +208,7 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
       try {
         const res = await fetch(`${SERVER_URL}/chat/requests?userId=${storedUserId}`, {
           headers: getAuthenticatedHeaders(),
+          credentials: 'include',
         });
         const data = await res.json();
         if (!res.ok) {
@@ -243,6 +244,7 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
       }
       
       let activeContact = null;
+      let fallbackRecipient: any = null;
 
       const currentRoomId = roomId || roomIdFromQuery;
       if (currentRoomId) {
@@ -252,6 +254,31 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
           const rid = [storedAddress.toLowerCase().trim(), otherUser.publicAddress.toLowerCase().trim()].sort().join('-');
           return rid === currentRoomId;
         });
+
+        if (!activeContact) {
+          const [roomLeft, roomRight] = currentRoomId.split('-');
+          const storedWallet = storedAddress.toLowerCase().trim();
+          const otherWallet = roomLeft?.toLowerCase().trim() === storedWallet
+            ? roomRight
+            : roomRight?.toLowerCase().trim() === storedWallet
+              ? roomLeft
+              : null;
+
+          if (otherWallet) {
+            try {
+              const lookupRes = await fetch(`${SERVER_URL}/auth/user/${encodeURIComponent(otherWallet)}`, {
+                headers: getAuthenticatedHeaders(),
+                credentials: 'include',
+              });
+              const lookupData = await lookupRes.json();
+              if (lookupRes.ok && lookupData.user) {
+                fallbackRecipient = lookupData.user;
+              }
+            } catch (lookupError) {
+              console.error('[Chat] Failed to lookup room recipient:', lookupError);
+            }
+          }
+        }
       } else if (targetPublicKey) {
         // Find contact by publicKey/address (legacy support or first hit)
         activeContact = contacts.find((c: any) => {
@@ -260,6 +287,23 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
           return (otherUser.publicKey?.trim() === normalizedTarget) || 
                  (otherUser.publicAddress?.toLowerCase() === normalizedTarget.toLowerCase());
         });
+      }
+
+      if (!activeContact) {
+        if (currentRoomId && fallbackRecipient) {
+          activeContact = {
+            from: { _id: storedUserId, publicAddress: storedAddress },
+            to: {
+              _id: fallbackRecipient._id,
+              publicAddress: fallbackRecipient.publicAddress,
+              publicKey: fallbackRecipient.publicKey,
+              username: fallbackRecipient.username,
+              displayName: fallbackRecipient.displayName,
+            },
+            fromCustomName: null,
+            toCustomName: null,
+          };
+        }
       }
 
       if (!activeContact) {
@@ -309,6 +353,7 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
 
         const res = await fetch(`${SERVER_URL}/chat/messages/${rid}?currentUserId=${storedUserId}&page=1&limit=20`, {
           headers: getAuthenticatedHeaders(),
+          credentials: 'include',
         });
         const remoteData = await res.json();
 
@@ -358,6 +403,15 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
             deliveryState: msg.deliveryState,
           }))
         );
+
+        // Notify sender about delivery for newly synced messages from 'other'
+        if (socketRef.current?.connected) {
+          decryptedRemoteMessages.forEach(msg => {
+            if (msg.sender === 'other' && msg.deliveryState !== 'read') {
+              socketRef.current?.emit('message_delivered', { roomId: rid, messageId: msg.id });
+            }
+          });
+        }
       } catch (error) {
         console.error('Failed to sync room messages from server:', error);
       }
@@ -399,6 +453,7 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
       const nextPage = page + 1;
       const res = await fetch(`${SERVER_URL}/chat/messages/${roomId}?currentUserId=${userId}&page=${nextPage}&limit=20`, {
         headers: getAuthenticatedHeaders(),
+        credentials: 'include',
       });
       const remoteData = await res.json();
       
@@ -534,7 +589,19 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
         };
 
         setMessages((prev) => {
+          // If message already exists by ID, ignore
           if (prev.some((m) => m.id === nextMessage.id)) return prev;
+          
+          // If it's from me, and we have a pending message with same text, replace it
+          if (isMe) {
+            const pendingIndex = prev.findIndex(m => m.sender === 'me' && m.deliveryState === 'pending' && m.text === text);
+            if (pendingIndex !== -1) {
+              const updated = [...prev];
+              updated[pendingIndex] = { ...nextMessage, deliveryState: 'sent' };
+              return updated;
+            }
+          }
+          
           return [...prev, nextMessage];
         });
 
@@ -579,15 +646,15 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
       updateDeliveryState(roomId, messageId, 'read');
     });
 
-    socket.on('user_typing', ({ userId }) => {
-      if (userId !== userId) {
-        setIsTyping(true);
+    socket.on('user_typing', ({ userId: typingUserId }) => {
+      if (typingUserId !== userId) {
+        setIsContactTyping(true);
       }
     });
 
-    socket.on('user_stopped_typing', ({ userId }) => {
-      if (userId !== userId) {
-        setIsTyping(false);
+    socket.on('user_stopped_typing', ({ userId: typingUserId }) => {
+      if (typingUserId !== userId) {
+        setIsContactTyping(false);
       }
     });
 
@@ -803,8 +870,6 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
 
   return (
     <div className="min-h-screen bg-background-primary text-text-primary font-sans flex flex-col">
-      <Navigation />
-
       {loading || isAuthorized === null ? (
         <div className="flex-1 flex flex-col items-center justify-center">
           <Loader2 className="w-10 h-10 text-accent animate-spin mb-4" />
@@ -891,7 +956,7 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
                 </button>
               </div>
             )}
-            {isTyping && (
+            {isContactTyping && (
               <div className="flex items-center gap-2 text-text-muted text-xs italic px-2">
                 <span className="flex gap-1">
                   <span className="w-1 h-1 bg-text-muted rounded-full animate-bounce [animation-delay:0ms]"></span>
@@ -1023,12 +1088,12 @@ const { sendTip, hash: tipHash, isPending: tipPending, isConfirming: tipConfirmi
                       setInput(e.target.value);
                       if (roomId && socketRef.current?.connected) {
                         if (typingTimeoutRef.current) window.clearTimeout(typingTimeoutRef.current);
-                        if (!isTyping) {
-                          setIsTyping(true);
+                        if (!isMeTyping) {
+                          setIsMeTyping(true);
                           socketRef.current.emit('typing_start', { roomId });
                         }
                         typingTimeoutRef.current = window.setTimeout(() => {
-                          setIsTyping(false);
+                          setIsMeTyping(false);
                           socketRef.current?.emit('typing_stop', { roomId });
                         }, 2000);
                       }

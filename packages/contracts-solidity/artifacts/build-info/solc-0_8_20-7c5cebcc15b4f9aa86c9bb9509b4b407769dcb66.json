@@ -1,0 +1,42 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_20-7c5cebcc15b4f9aa86c9bb9509b4b407769dcb66",
+  "solcVersion": "0.8.20",
+  "solcLongVersion": "0.8.20+commit.a1b79de6",
+  "compilerType": "solc",
+  "userSourceNameMap": {
+    "contracts/ChatRegistry.sol": "project/contracts/ChatRegistry.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "shanghai",
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode.linkReferences",
+            "evm.bytecode.object",
+            "evm.bytecode.opcodes",
+            "evm.bytecode.sourceMap",
+            "evm.deployedBytecode.immutableReferences",
+            "evm.deployedBytecode.linkReferences",
+            "evm.deployedBytecode.object",
+            "evm.deployedBytecode.opcodes",
+            "evm.deployedBytecode.sourceMap",
+            "evm.methodIdentifiers"
+          ]
+        }
+      },
+      "remappings": []
+    },
+    "sources": {
+      "project/contracts/ChatRegistry.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\n/**\n * @title ChatRegistry\n * @dev Manages user identities (public encryption keys) and logs messages with optional tips.\n */\ncontract ChatRegistry {\n    // Mapping from wallet address to their public encryption key\n    mapping(address => bytes) public encryptionKeys;\n\n    // Event emitted when a new identity is registered\n    event IdentityRegistered(address indexed user, bytes encryptionKey);\n\n    // Event emitted when a message is sent (transaction logged)\n    // messageHash is the SHA256/Keccak256 hash of the encrypted payload\n    event MessageSent(\n        address indexed from,\n        address indexed to,\n        bytes32 messageHash,\n        uint256 tipAmount,\n        uint256 timestamp\n    );\n\n    /**\n     * @dev Register or update the caller's public encryption key.\n     * @param _encryptionKey The public key used for encrypting messages to this user.\n     */\n    function registerIdentity(bytes calldata _encryptionKey) external {\n        encryptionKeys[msg.sender] = _encryptionKey;\n        emit IdentityRegistered(msg.sender, _encryptionKey);\n    }\n\n    /**\n     * @dev Log a message transaction on-chain and optionally send a tip.\n     * @param _to The recipient of the message.\n     * @param _messageHash The hash of the encrypted message for integrity.\n     */\n    function sendMessage(address _to, bytes32 _messageHash) external payable {\n        require(_to != address(0), \"Cannot send to zero address\");\n        \n        // If a tip was sent, forward it to the recipient\n        if (msg.value > 0) {\n            (bool success, ) = _to.call{value: msg.value}(\"\");\n            require(success, \"Tip transfer failed\");\n        }\n\n        emit MessageSent(\n            msg.sender,\n            _to,\n            _messageHash,\n            msg.value,\n            block.timestamp\n        );\n    }\n\n    /**\n     * @dev Get the public encryption key for a specific user.\n     */\n    function getEncryptionKey(address _user) external view returns (bytes memory) {\n        return encryptionKeys[_user];\n    }\n}\n"
+      }
+    }
+  }
+}

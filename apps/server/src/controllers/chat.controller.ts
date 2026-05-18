@@ -247,7 +247,7 @@ export const getMessages = async (req: AuthRequest, res: Response) => {
       .sort({ timestamp: -1 })
       .skip(skip)
       .limit(limitNum)
-      .populate('sender', 'publicAddress shortId');
+      .populate('sender', 'publicAddress username displayName');
 
     const formattedMessages = messages.map((msg) => ({
       id: msg._id.toString(),

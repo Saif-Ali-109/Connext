@@ -26,6 +26,7 @@ export async function uploadMedia(file: File): Promise<UploadResult> {
       method: 'POST',
       headers,
       body: formData,
+      credentials: 'include',
     });
 
     if (!uploadRes.ok) {
@@ -54,6 +55,7 @@ export async function getMediaDownloadUrl(objectKey: string): Promise<string> {
     method: 'POST',
     headers,
     body: JSON.stringify({ objectKey }),
+    credentials: 'include',
   });
 
   if (!signRes.ok) {

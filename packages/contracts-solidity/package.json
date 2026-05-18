@@ -2,38 +2,35 @@
   "name": "contracts-solidity",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "hardhat compile",
+    "compile": "hardhat compile",
+    "test": "hardhat test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@nomicfoundation/hardhat-chai-matchers": "^3.0.0",
     "@nomicfoundation/hardhat-ethers": "^4.0.10",
-    "@nomicfoundation/hardhat-ignition": "^3.1.4",
-    "@nomicfoundation/hardhat-ignition-ethers": "^3.1.4",
+    "@nomicfoundation/hardhat-ignition": "^3.1.5",
+    "@nomicfoundation/hardhat-ignition-ethers": "^3.1.5",
+    "@nomicfoundation/hardhat-mocha": "^3.0.19",
     "@nomicfoundation/hardhat-network-helpers": "^3.0.7",
-    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
     "@nomicfoundation/hardhat-verify": "^3.0.16",
-    "@nomicfoundation/ignition-core": "^3.1.4",
-    "@typechain/ethers-v6": "^0.5.1",
-    "@typechain/hardhat": "^9.1.0",
-    "@types/chai": "^4.3.20",
+    "@nomicfoundation/ignition-core": "^3.1.5",
+    "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.10",
-    "chai": "^4.5.0",
+    "chai": "^6.2.2",
     "dotenv": "^16.6.1",
     "ethers": "^6.16.0",
-    "hardhat": "^2.22.17",
-    "hardhat-gas-reporter": "^1.0.10",
-    "solidity-coverage": "^0.7.22",
-    "typechain": "^8.3.2"
+    "hardhat": "^3.4.5",
+    "mocha": "^11.0.0"
   },
   "dependencies": {
-    "@solana/web3.js": "0.0.3",
+    "@solana/web3.js": "^1.98.4",
     "@wagmi/connectors": "7.2.1",
-    "firebase-admin": "10.1.0",
-    "next": "9.3.3"
+    "firebase-admin": "^12.0.0"
   }
 }

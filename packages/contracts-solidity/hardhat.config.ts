@@ -1,5 +1,6 @@
-import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox";
+import hardhatEthers from "@nomicfoundation/hardhat-ethers";
+import hardhatMocha from "@nomicfoundation/hardhat-mocha";
+import { defineConfig } from "hardhat/config";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -8,10 +9,13 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY || "0x000000000000000000000000000000
 const RPC_URL = process.env.RPC_URL || "https://rpc.ankr.com/eth_sepolia";
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 
-const config: HardhatUserConfig = {
+const config = defineConfig({
+  plugins: [hardhatEthers, hardhatMocha],
   solidity: "0.8.20",
   networks: {
     sepolia: {
+      type: "http",
+      chainType: "l1",
       url: RPC_URL,
       accounts: [PRIVATE_KEY],
     },
@@ -19,6 +23,6 @@ const config: HardhatUserConfig = {
   etherscan: {
     apiKey: ETHERSCAN_API_KEY,
   },
-};
+});
 
 export default config;

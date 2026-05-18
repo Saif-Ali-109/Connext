@@ -3,11 +3,23 @@ import { sepolia } from 'wagmi/chains';
 import { walletConnect, injected, coinbaseWallet } from 'wagmi/connectors';
 import { Capacitor } from '@capacitor/core';
 
-const projectIdEnv = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
-if (!projectIdEnv) {
-  throw new Error('Missing NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID environment variable');
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+function readPublicEnv(name: string, fallback: string) {
+  const value = process.env[name];
+  if (value) return value;
+
+  const message = `Missing ${name}; using a development fallback.`;
+  if (process.env.NODE_ENV === 'production') {
+    console.error(message);
+  } else if (typeof window !== 'undefined') {
+    console.warn(message);
+  }
+
+  return fallback;
 }
-export const projectId = projectIdEnv;
+
+export const projectId = readPublicEnv('NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID', 'placeholder-id');
 
 const isNativePlatform = Capacitor.isNativePlatform();
 
@@ -50,8 +62,4 @@ export const getConfig = () => {
 // For backward compatibility if needed, but we should prefer getConfig()
 export const config = getConfig();
 
-const chatRegistryEnv = process.env.NEXT_PUBLIC_CHAT_REGISTRY_ADDRESS;
-if (!chatRegistryEnv) {
-  throw new Error('Missing NEXT_PUBLIC_CHAT_REGISTRY_ADDRESS environment variable');
-}
-export const CHAT_REGISTRY_ADDRESS = chatRegistryEnv;
+export const CHAT_REGISTRY_ADDRESS = readPublicEnv('NEXT_PUBLIC_CHAT_REGISTRY_ADDRESS', ZERO_ADDRESS);

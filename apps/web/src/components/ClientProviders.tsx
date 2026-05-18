@@ -3,8 +3,8 @@
 import React, { ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 
-const Web3Provider = dynamic(() => import('./Web3Provider'), { 
-  ssr: true // Allow SSR for the provider itself to wrap children with WagmiProvider
+const Web3Provider = dynamic(() => import('./Web3Provider'), {
+  ssr: false,
 });
 
 const NotificationManager = dynamic(() => import('./NotificationManager'), { 

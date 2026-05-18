@@ -101,11 +101,13 @@ export default function ConnectPageContent() {
     setError(null);
     
     try {
-      const { connect, connectors } = await import('wagmi/actions');
-      const metamaskConnector = connectors().find(c => c.id === 'injected' || c.name?.toLowerCase().includes('metamask'));
+      const { connect, getConnectors } = await import('wagmi/actions');
+      const { config } = await import('../../lib/ethereum');
+      const connectors = getConnectors(config);
+      const metamaskConnector = connectors.find(c => c.id === 'injected' || c.name?.toLowerCase().includes('metamask'));
       if (!metamaskConnector) throw new Error('MetaMask not found');
       
-      await connect({ connector: metamaskConnector });
+      await connect(config, { connector: metamaskConnector });
     } catch (err: any) {
       setError(err.message || 'Failed to connect to MetaMask');
       loginInProgress.current = false;

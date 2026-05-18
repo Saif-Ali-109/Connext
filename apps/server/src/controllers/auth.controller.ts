@@ -6,11 +6,9 @@ import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { User } from '../models/User';
 import { JWT_SECRET, EXPECTED_EVM_CHAIN_ID, JWT_EXPIRES_DAYS } from '../lib/constants';
+import { readEnv, ZERO_ADDRESS } from '../lib/env';
 
-const CHAT_REGISTRY_ADDRESS = process.env.CHAT_REGISTRY_ADDRESS;
-if (!CHAT_REGISTRY_ADDRESS) {
-  throw new Error('Missing CHAT_REGISTRY_ADDRESS environment variable');
-}
+const CHAT_REGISTRY_ADDRESS = readEnv('CHAT_REGISTRY_ADDRESS', ZERO_ADDRESS, { requiredInProduction: true });
 const REGISTRY_ABI = ["function getEncryptionKey(address user) view returns (bytes)"];
 
 async function fetchPublicKeyFromChain(address: string): Promise<string | null> {
@@ -52,13 +50,9 @@ export const getNonce = async (req: Request, res: Response) => {
       user.lastSeenAt = new Date();
       await user.save();
     } else {
-      // Generate a short ID (e.g. USER-A1B2C3D4)
-      const shortId = `CHAT-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-      
       user = await User.create({
         publicAddress: formattedAddress,
         nonce,
-        shortId,
         walletType: walletType || 'walletconnect',
         lastSeenAt: new Date(),
       });
@@ -236,6 +230,48 @@ export const getPublicKeyByWallet = async (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Public key not found for this wallet' });
   } catch (error) {
     console.error('Error in getPublicKeyByWallet:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const getUserByWallet = async (req: Request, res: Response) => {
+  try {
+    const { wallet } = req.params;
+    const normalizedWallet = wallet.trim();
+    const walletCandidates = Array.from(new Set([
+      normalizedWallet,
+      normalizedWallet.toLowerCase(),
+      normalizedWallet.toUpperCase(),
+    ]));
+
+    let user = null;
+    for (const candidate of walletCandidates) {
+      user = await User.findOne({
+        $or: [
+          { publicAddress: candidate },
+          { publicKey: candidate },
+        ],
+      });
+      if (user) break;
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.status(200).json({
+      user: {
+        _id: user._id,
+        publicAddress: user.publicAddress,
+        publicKey: user.publicKey,
+        username: user.username,
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
+        walletType: user.walletType,
+      },
+    });
+  } catch (error) {
+    console.error('Error in getUserByWallet:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
