@@ -7,7 +7,7 @@
     "build": "next build",
     "build:web": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.10.0",
