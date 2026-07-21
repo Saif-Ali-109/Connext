@@ -96,5 +96,5 @@ npm run lint         # Runs ESLint checks across workspaces
 
 ## License
 
-This project is open-source software licensed under the [MIT License](file:///home/ain/Desktop/all%20projects/Connext/LICENSE).
+This project is open-source software licensed under the [MIT License](/LICENSE).
 
