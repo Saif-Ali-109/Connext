@@ -1,0 +1,15 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = ["npm ci"]
+cacheDirectories = ["node_modules", "apps/server/node_modules", "packages/db/node_modules"]
+
+[phases.build]
+cmds = [
+  "npm run build --workspace=@connext/db",
+  "npm run build --workspace=@connext/server"
+]
+
+[start]
+cmd = "npm run start --workspace=@connext/server"
