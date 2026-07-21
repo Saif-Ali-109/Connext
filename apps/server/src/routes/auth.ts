@@ -4,7 +4,6 @@ import {
   getSession,
   logout,
   updateUsername,
-  updatePublicKey,
   updateFcmToken,
   getUserByQuery,
   updatePassword,
@@ -17,7 +16,6 @@ router.post('/bridge', bridgeSession);
 router.get('/session', authenticateToken, getSession);
 router.post('/logout', authenticateToken, logout);
 router.post('/username', authenticateToken, updateUsername);
-router.post('/public-key', authenticateToken, updatePublicKey);
 router.post('/update-password', authenticateToken, updatePassword);
 router.post('/fcm-token', authenticateToken, updateFcmToken);
 router.get('/user/:query', authenticateToken, getUserByQuery);

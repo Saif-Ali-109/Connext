@@ -14,7 +14,6 @@ function publicUser(row: typeof users.$inferSelect) {
     username: row.username,
     displayName: row.displayName || row.name,
     avatarUrl: row.avatarUrl || row.image,
-    publicKey: row.publicKey,
     lastSeenAt: row.lastSeenAt,
     hasPassword: Boolean(row.passwordHash),
   };
@@ -219,26 +218,6 @@ export const updatePassword = async (req: AuthRequest, res: Response) => {
     return res.status(200).json({ user: publicUser(updated) });
   } catch (error) {
     console.error('[updatePassword]', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-};
-
-export const updatePublicKey = async (req: AuthRequest, res: Response) => {
-  try {
-    const { publicKey } = req.body as { publicKey?: string };
-    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
-    if (!publicKey) return res.status(400).json({ error: 'publicKey required' });
-
-    const db = getDb();
-    const [updated] = await db
-      .update(users)
-      .set({ publicKey, updatedAt: new Date() })
-      .where(eq(users.id, req.user.id))
-      .returning();
-
-    return res.status(200).json({ user: publicUser(updated) });
-  } catch (error) {
-    console.error('[updatePublicKey]', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };

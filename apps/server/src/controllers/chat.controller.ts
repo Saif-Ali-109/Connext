@@ -22,7 +22,6 @@ const publicUser = (row: typeof users.$inferSelect) => ({
   username: row.username,
   displayName: row.displayName || row.name,
   avatarUrl: row.avatarUrl || row.image,
-  publicKey: row.publicKey,
 });
 
 const isHiddenBy = (hiddenBy: string[] | null | undefined, userId: string) =>
@@ -305,8 +304,7 @@ export const getMessages = async (req: AuthRequest, res: Response) => {
     const formattedMessages = rows.map((msg) => ({
       id: msg.id,
       sender: msg.senderId === authenticatedUserId ? 'me' : 'other',
-      text: msg.content || msg.encryptedContent || '',
-      encryptedContentForSender: msg.encryptedContentForSender,
+      text: msg.content || '',
       createdAt: msg.timestamp,
       deliveryState: msg.read ? 'read' : msg.deliveredAt ? 'delivered' : 'sent',
     }));
@@ -399,8 +397,6 @@ export const sendMessage = async (req: AuthRequest, res: Response) => {
         senderId: authenticatedUserId,
         roomId,
         content: content || bodyText,
-        encryptedContent: encryptedContent || null,
-        encryptedContentForSender: encryptedContentForSender || null,
       })
       .returning();
 

@@ -260,8 +260,6 @@ io.on('connection', (socket) => {
           sender: { id: currentUserId },
           roomId,
           content: data.content || bodyText,
-          encryptedContent: data.encryptedContent || null,
-          encryptedContentForSender: data.encryptedContentForSender || null,
           createdAt: new Date().toISOString(),
         };
 
@@ -273,8 +271,6 @@ io.on('connection', (socket) => {
               senderId: currentUserId,
               roomId,
               content: data.content || bodyText,
-              encryptedContent: data.encryptedContent || null,
-              encryptedContentForSender: data.encryptedContentForSender || null,
             })
             .returning();
           relayPayload.id = dbMsg.id;

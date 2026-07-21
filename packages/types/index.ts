@@ -4,7 +4,6 @@ export interface User {
   username?: string | null;
   displayName?: string | null;
   avatarUrl?: string | null;
-  publicKey?: string | null;
 }
 
 export interface Message {
