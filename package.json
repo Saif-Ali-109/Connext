@@ -13,7 +13,7 @@
     "dev:server": "npm run build --workspace=@connext/db && npm run dev --workspace=apps/server",
     "dev:web": "npm run build --workspace=@connext/db && npm run dev --workspace=apps/web",
     "build": "npm run build --workspace=@connext/db && npm run build --workspace=connext-web && npm run build --workspace=@connext/server",
-    "start": "concurrently \"npm run start --workspace=@connext/server\" \"npm run start --workspace=connext-web\"",
+    "start": "concurrently \"npm run start --workspace=@connext/server\" \"node apps/web/.next/standalone/server.js\"",
     "lint": "npm run lint --workspaces --if-present",
     "db:push": "npm run push --workspace=@connext/db"
   },

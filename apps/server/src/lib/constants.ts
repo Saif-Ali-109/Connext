@@ -17,7 +17,8 @@ export const DATABASE_URL = readEnv(
   'postgresql://postgres:postgres@localhost:5432/connext',
   { requiredInProduction: true }
 );
-export const PORT = readNumberEnv('PORT', 4001);
+// Express always runs on 4001 internally — Railway's $PORT is reserved for Next.js
+export const PORT = 4001;
 export const ALLOWED_ORIGINS = readEnv(
   'ALLOWED_ORIGINS',
   'http://localhost:3000'
