@@ -93,3 +93,8 @@ npm run db:push      # Applies Drizzle schema to PostgreSQL
 npm run build        # Builds all workspaces for production
 npm run lint         # Runs ESLint checks across workspaces
 ```
+
+## License
+
+This project is open-source software licensed under the [MIT License](file:///home/ain/Desktop/all%20projects/Connext/LICENSE).
+
