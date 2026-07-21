@@ -12,11 +12,13 @@
     "dev": "npm run build --workspace=@connext/db && npm run dev --workspace=apps/server & npm run dev --workspace=apps/web",
     "dev:server": "npm run build --workspace=@connext/db && npm run dev --workspace=apps/server",
     "dev:web": "npm run build --workspace=@connext/db && npm run dev --workspace=apps/web",
-    "build": "npm run build --workspace=@connext/db && npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=@connext/db && npm run build --workspace=connext-web && npm run build --workspace=@connext/server",
+    "start": "concurrently \"npm run start --workspace=@connext/server\" \"npm run start --workspace=connext-web\"",
     "lint": "npm run lint --workspaces --if-present",
     "db:push": "npm run push --workspace=@connext/db"
   },
   "devDependencies": {
+    "concurrently": "^9.2.4",
     "rimraf": "^5.0.0",
     "ts-node": "^10.9.0",
     "typescript": "5.7.2"
