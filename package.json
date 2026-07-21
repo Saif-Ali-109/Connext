@@ -1,5 +1,5 @@
 {
-  "name": "wallet-chat-monorepo",
+  "name": "connext-monorepo",
   "version": "1.0.0",
   "private": true,
   "workspaces": [
@@ -8,11 +8,12 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=apps/server & npm run dev --workspace=apps/web",
-    "dev:server": "npm run dev --workspace=apps/server",
-    "dev:web": "npm run dev --workspace=apps/web",
-    "build": "npm run build --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present"
+    "dev": "npm run build --workspace=@connext/db && npm run dev --workspace=apps/server & npm run dev --workspace=apps/web",
+    "dev:server": "npm run build --workspace=@connext/db && npm run dev --workspace=apps/server",
+    "dev:web": "npm run build --workspace=@connext/db && npm run dev --workspace=apps/web",
+    "build": "npm run build --workspace=@connext/db && npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "db:push": "npm run push --workspace=@connext/db"
   },
   "devDependencies": {
     "rimraf": "^5.0.0",
@@ -21,14 +22,6 @@
   },
   "overrides": {
     "react": "19.2.5",
-    "react-dom": "19.2.5",
-    "ox": "0.14.20",
-    "@solana/errors": "5.5.1",
-    "@walletconnect/core": "2.23.9",
-    "@walletconnect/utils": "2.23.9"
-  },
-  "dependencies": {
-    "events": "^3.3.0",
-    "ox": "0.14.20"
+    "react-dom": "19.2.5"
   }
 }

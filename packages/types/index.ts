@@ -1,7 +1,10 @@
 export interface User {
   id: string;
-  publicKey: string;
-  username?: string;
+  email?: string | null;
+  username?: string | null;
+  displayName?: string | null;
+  avatarUrl?: string | null;
+  publicKey?: string | null;
 }
 
 export interface Message {

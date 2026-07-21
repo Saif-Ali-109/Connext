@@ -2,12 +2,17 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET } from '../lib/constants';
 
+export interface AuthUser {
+  id: string;
+  email?: string | null;
+  name?: string | null;
+}
+
 export interface AuthRequest extends Request {
-  user?: any;
+  user?: AuthUser;
 }
 
 export const authMiddleware = (req: AuthRequest, res: Response, next: NextFunction) => {
-  // Read token from httpOnly cookie
   const token = req.cookies?.token;
 
   if (!token) {
@@ -15,10 +20,13 @@ export const authMiddleware = (req: AuthRequest, res: Response, next: NextFuncti
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET) as AuthUser;
+    if (!decoded?.id) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid token payload' });
+    }
     req.user = decoded;
     next();
-  } catch (error) {
+  } catch {
     return res.status(401).json({ error: 'Unauthorized: Invalid token' });
   }
 };

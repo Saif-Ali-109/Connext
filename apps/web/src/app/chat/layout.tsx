@@ -1,47 +1,27 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getEncryptedItem } from '../../lib/storage';
-import Navigation from '../../components/Navigation';
-
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4001';
+import { useSession } from 'next-auth/react';
+import { getApiBaseUrl } from '../../lib/api';
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const [mounted, setMounted] = useState(false);
+  const { status } = useSession();
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    if (status === 'unauthenticated') {
+      router.push('/login');
+      return;
+    }
+    if (status !== 'authenticated') return;
 
-  useEffect(() => {
-    if (!mounted) return;
-    
-    const checkSession = async () => {
-      try {
-        const res = await fetch(`${SERVER_URL}/auth/session`, {
-          credentials: 'include',
-        });
-        if (!res.ok) {
-          router.push('/connect');
-        }
-      } catch {
-        router.push('/connect');
-      }
-    };
+    void fetch(`${getApiBaseUrl()}/auth/session`, { credentials: 'include' }).then((res) => {
+      if (!res.ok) router.push('/login');
+    });
+  }, [status, router]);
 
-    checkSession();
-  }, [mounted, router]);
+  if (status === 'loading') return null;
 
-  if (!mounted) return null;
-
-  return (
-    <div className="min-h-screen bg-background-primary text-text-primary">
-      <Navigation />
-      <main className="pt-4">
-        {children}
-      </main>
-    </div>
-  );
+  return <div className="min-h-screen bg-background-primary text-text-primary">{children}</div>;
 }

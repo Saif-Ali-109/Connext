@@ -1,298 +1,298 @@
-import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
-import { ethers } from 'ethers';
+import { Response } from 'express';
 import jwt from 'jsonwebtoken';
-import nacl from 'tweetnacl';
-import bs58 from 'bs58';
-import { User } from '../models/User';
-import { JWT_SECRET, EXPECTED_EVM_CHAIN_ID, JWT_EXPIRES_DAYS } from '../lib/constants';
-import { readEnv, ZERO_ADDRESS } from '../lib/env';
+import { eq, or, ilike } from 'drizzle-orm';
+import { users, hashPassword } from '@connext/db';
+import { AuthRequest } from '../middleware/auth.middleware';
+import { getDb, JWT_SECRET, JWT_EXPIRES_DAYS } from '../lib/constants';
+import { verifyBridgePayload, type BridgePayload } from '../lib/bridge';
 
-const CHAT_REGISTRY_ADDRESS = readEnv('CHAT_REGISTRY_ADDRESS', ZERO_ADDRESS, { requiredInProduction: true });
-const REGISTRY_ABI = ["function getEncryptionKey(address user) view returns (bytes)"];
-
-async function fetchPublicKeyFromChain(address: string): Promise<string | null> {
-  try {
-    const provider = new ethers.JsonRpcProvider('https://ethereum-sepolia-rpc.publicnode.com');
-    const contract = new ethers.Contract(CHAT_REGISTRY_ADDRESS as string, REGISTRY_ABI, provider);
-    const keyBytes = await contract.getEncryptionKey(address);
-    if (keyBytes && keyBytes !== '0x') {
-      return ethers.toUtf8String(keyBytes);
-    }
-  } catch (err) {
-    console.error('[AUTH] Error fetching public key from chain:', err);
-  }
-  return null;
+function publicUser(row: typeof users.$inferSelect) {
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    username: row.username,
+    displayName: row.displayName || row.name,
+    avatarUrl: row.avatarUrl || row.image,
+    publicKey: row.publicKey,
+    lastSeenAt: row.lastSeenAt,
+    hasPassword: Boolean(row.passwordHash),
+  };
 }
 
-export const getNonce = async (req: Request, res: Response) => {
-  const { publicAddress, walletType, chainId } = req.body;
-  console.log(`\n[AUTH] Nonce Request Received:`);
-  console.log(`      Address: ${publicAddress}`);
-  console.log(`      Wallet:  ${walletType}`);
-  console.log(`      Chain:   ${chainId}`);
-  
+function setAuthCookie(res: Response, user: { id: string; email?: string | null; name?: string | null }) {
+  const token = jwt.sign(
+    { id: user.id, email: user.email ?? null, name: user.name ?? null },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_DAYS as jwt.SignOptions['expiresIn'] }
+  );
+
+  res.cookie('token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  return token;
+}
+
+/** Called by Next.js after Auth.js login — mints API JWT cookie */
+export const bridgeSession = async (req: AuthRequest, res: Response) => {
   try {
-    if (!publicAddress) {
-      return res.status(400).json({ error: 'Public address is required' });
-    }
-    if (walletType !== 'solana' && chainId && Number(chainId) !== EXPECTED_EVM_CHAIN_ID) {
-      return res.status(400).json({ error: `Unsupported chain. Expected ${EXPECTED_EVM_CHAIN_ID}` });
+    const { payload, sig } = req.body as { payload?: BridgePayload; sig?: string };
+    if (!payload || !sig || !verifyBridgePayload(payload, sig)) {
+      return res.status(401).json({ error: 'Invalid bridge signature' });
     }
 
-    const nonce = uuidv4();
-    const formattedAddress = walletType === 'solana' ? publicAddress : publicAddress.toLowerCase();
-    
-    let user = await User.findOne({ publicAddress: formattedAddress });
-
-    if (user) {
-      user.nonce = nonce;
-      user.lastSeenAt = new Date();
-      await user.save();
-    } else {
-      user = await User.create({
-        publicAddress: formattedAddress,
-        nonce,
-        walletType: walletType || 'walletconnect',
-        lastSeenAt: new Date(),
-      });
-    }
-
-    console.log(`[AUTH] Nonce Generated: ${nonce} for ${formattedAddress}`);
-    return res.status(200).json({ nonce });
-  } catch (error) {
-    console.error('[AUTH] Error in getNonce:', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-};
-
-export const verifySignature = async (req: Request, res: Response) => {
-  const { publicAddress, signature, walletType, chainId } = req.body;
-  console.log(`\n[AUTH] Signature Verification Request:`);
-  console.log(`      Address: ${publicAddress}`);
-  console.log(`      Wallet:  ${walletType}`);
-  
-  try {
-
-    if (!publicAddress || !signature) {
-      return res.status(400).json({ error: 'Public address and signature are required' });
-    }
-    if (walletType !== 'solana' && chainId && Number(chainId) !== EXPECTED_EVM_CHAIN_ID) {
-      return res.status(400).json({ error: `Unsupported chain. Expected ${EXPECTED_EVM_CHAIN_ID}` });
-    }
-
-    const formattedAddress = walletType === 'solana' ? publicAddress : publicAddress.toLowerCase();
-    const user = await User.findOne({ publicAddress: formattedAddress });
-    
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const msg = `I am signing my one-time nonce: ${user.nonce}`;
-    let isValid = false;
-
-    if (walletType === 'solana') {
-      try {
-        const signatureUint8 = bs58.decode(signature);
-        const pubKeyUint8 = bs58.decode(publicAddress);
-        const msgUint8 = new TextEncoder().encode(msg);
-        isValid = nacl.sign.detached.verify(msgUint8, signatureUint8, pubKeyUint8);
-      } catch (err) {
-        console.error('Solana verification error:', err);
-        isValid = false;
-      }
-    } else {
-      // Default to Ethereum signature verification for WalletConnect sessions.
-      try {
-        const recoveredAddress = ethers.verifyMessage(msg, signature);
-        isValid = recoveredAddress.toLowerCase() === publicAddress.toLowerCase();
-      } catch (err) {
-        console.error('Ethereum verification error:', err);
-        isValid = false;
-      }
-    }
-
-    if (!isValid) {
-      console.log(`[AUTH] Verification Failed: Invalid signature for ${publicAddress}`);
-      return res.status(401).json({ error: 'Signature verification failed' });
-    }
-    
-    console.log(`[AUTH] Verification Success: ${publicAddress}`);
-
-    // Update nonce to prevent replay attacks
-    user.nonce = uuidv4();
-    user.lastSeenAt = new Date();
-    await user.save();
-
-    // Generate JWT
-    const expiresIn = (JWT_EXPIRES_DAYS.toString().includes('h') || JWT_EXPIRES_DAYS.toString().includes('d'))
-      ? JWT_EXPIRES_DAYS
-      : `${JWT_EXPIRES_DAYS}d`;
-
-    const token = jwt.sign(
-      { 
-        id: user._id, 
-        publicAddress: user.publicAddress,
-        walletType: user.walletType
-      }, 
-      JWT_SECRET, 
-      { expiresIn: expiresIn as any }
-    );
-
-    console.log(`[AUTH] Token Generated for ${user.publicAddress}`);
-
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // Only true for HTTPS
-      sameSite: 'lax', // Changed from 'strict' to allow cross-site requests during development
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    const db = getDb();
+    const existing = await db.query.users.findFirst({
+      where: eq(users.id, payload.userId),
     });
 
-    return res.status(200).json({ user });
-  } catch (error) {
-    console.error('[AUTH] Error in verifySignature:', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-};
-
-export const getSession = async (req: any, res: Response) => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({ error: 'Unauthorized: No active session' });
-    }
-
-    const user = await User.findById(userId).select('_id publicAddress publicKey username walletType');
+    let user = existing;
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      const [created] = await db
+        .insert(users)
+        .values({
+          id: payload.userId,
+          email: payload.email ?? null,
+          name: payload.name ?? null,
+          image: payload.image ?? null,
+          displayName: payload.name ?? null,
+          avatarUrl: payload.image ?? null,
+        })
+        .returning();
+      user = created;
+    } else {
+      const [updated] = await db
+        .update(users)
+        .set({
+          email: payload.email ?? user.email,
+          name: payload.name ?? user.name,
+          image: payload.image ?? user.image,
+          updatedAt: new Date(),
+          lastSeenAt: new Date(),
+        })
+        .where(eq(users.id, user.id))
+        .returning();
+      user = updated;
     }
 
-    if (!user.publicKey && user.walletType !== 'solana') {
-      const onChainKey = await fetchPublicKeyFromChain(user.publicAddress);
-      if (onChainKey) {
-        user.publicKey = onChainKey;
-        await user.save();
-      }
-    }
-
-    return res.status(200).json({ user });
+    setAuthCookie(res, user);
+    return res.status(200).json({ user: publicUser(user) });
   } catch (error) {
-    console.error('[AUTH] Error in getSession:', error);
+    console.error('[bridgeSession]', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-export const updatePublicKey = async (req: any, res: Response) => {
+export const getSession = async (req: AuthRequest, res: Response) => {
   try {
-    const { publicKey } = req.body;
-    const userId = req.user.id;
-
-    if (!publicKey) {
-      return res.status(400).json({ error: 'Public key is required' });
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    user.publicKey = publicKey;
-    await user.save();
-
-    return res.status(200).json({ message: 'Public key updated successfully' });
-  } catch (error) {
-    console.error('Error in updatePublicKey:', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-};
-
-export const getPublicKeyByWallet = async (req: Request, res: Response) => {
-  try {
-    const { wallet } = req.params;
-    const user = await User.findOne({ publicAddress: wallet.toLowerCase() });
-
-    if (user && user.publicKey) {
-      return res.status(200).json({ publicKey: user.publicKey });
-    }
-
-    // Fallback to checking the smart contract
-    const onChainKey = await fetchPublicKeyFromChain(wallet);
-    if (onChainKey) {
-      if (user) {
-        user.publicKey = onChainKey;
-        await user.save();
-      } else {
-        // We could create a basic user record here, but it's not strictly necessary just to return the key
-      }
-      return res.status(200).json({ publicKey: onChainKey });
-    }
-
-    return res.status(404).json({ error: 'Public key not found for this wallet' });
-  } catch (error) {
-    console.error('Error in getPublicKeyByWallet:', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-};
-
-export const getUserByWallet = async (req: Request, res: Response) => {
-  try {
-    const { wallet } = req.params;
-    const normalizedWallet = wallet.trim();
-    const walletCandidates = Array.from(new Set([
-      normalizedWallet,
-      normalizedWallet.toLowerCase(),
-      normalizedWallet.toUpperCase(),
-    ]));
-
-    let user = null;
-    for (const candidate of walletCandidates) {
-      user = await User.findOne({
-        $or: [
-          { publicAddress: candidate },
-          { publicKey: candidate },
-        ],
-      });
-      if (user) break;
-    }
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    return res.status(200).json({
-      user: {
-        _id: user._id,
-        publicAddress: user.publicAddress,
-        publicKey: user.publicKey,
-        username: user.username,
-        displayName: user.displayName,
-        avatarUrl: user.avatarUrl,
-        walletType: user.walletType,
-      },
+    const db = getDb();
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, req.user.id),
     });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.status(200).json({ user: publicUser(user) });
   } catch (error) {
-    console.error('Error in getUserByWallet:', error);
+    console.error('[getSession]', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-export const updateFcmToken = async (req: any, res: Response) => {
+export const logout = async (_req: AuthRequest, res: Response) => {
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  });
+  return res.status(200).json({ ok: true });
+};
+
+export const updateUsername = async (req: AuthRequest, res: Response) => {
   try {
-    const { fcmToken } = req.body;
-    const userId = req.user.id;
-    if (!fcmToken) {
-      return res.status(400).json({ error: 'fcmToken is required' });
+    const { username, displayName, password } = req.body as {
+      username?: string;
+      displayName?: string;
+      password?: string;
+    };
+
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+
+    if (username) {
+      const normalized = username.trim().toLowerCase();
+      if (!/^[a-z0-9_]{3,24}$/.test(normalized)) {
+        return res.status(400).json({
+          error: 'Username must be 3-24 chars: lowercase letters, numbers, underscore',
+        });
+      }
+
+      const db = getDb();
+
+      // A password is required the first time a user reserves a username, so
+      // they can later sign in with email + password.
+      const existing = await db.query.users.findFirst({
+        where: eq(users.id, req.user.id),
+      });
+      let passwordHash: string | undefined;
+      if (!existing?.passwordHash) {
+        if (!password || password.length < 8) {
+          return res.status(400).json({ error: 'Password must be at least 8 characters' });
+        }
+        passwordHash = await hashPassword(password);
+      }
+
+      const taken = await db.query.users.findFirst({
+        where: eq(users.username, normalized),
+      });
+      if (taken && taken.id !== req.user.id) {
+        return res.status(409).json({ error: 'Username already taken' });
+      }
+
+      try {
+        const [updated] = await db
+          .update(users)
+          .set({
+            username: normalized,
+            displayName: displayName?.trim() || normalized,
+            ...(passwordHash ? { passwordHash } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, req.user.id))
+          .returning();
+
+        return res.status(200).json({ user: publicUser(updated) });
+      } catch (err) {
+        // Unique constraint race: another request claimed the same username first.
+        if (err && typeof err === 'object' && 'code' in err && (err as { code?: string }).code === '23505') {
+          return res.status(409).json({ error: 'Username already taken' });
+        }
+        throw err;
+      }
     }
-    user.fcmToken = fcmToken;
-    user.lastSeenAt = new Date();
-    await user.save();
-    return res.status(200).json({ message: 'FCM token updated' });
+
+    if (displayName) {
+      const db = getDb();
+      const [updated] = await db
+        .update(users)
+        .set({ displayName: displayName.trim(), updatedAt: new Date() })
+        .where(eq(users.id, req.user.id))
+        .returning();
+      return res.status(200).json({ user: publicUser(updated) });
+    }
+
+    return res.status(400).json({ error: 'username or displayName required' });
   } catch (error) {
-    console.error('Error in updateFcmToken:', error);
+    console.error('[updateUsername]', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
+};
+
+/** Set a new password for the authenticated user (used by the recovery flow). */
+export const updatePassword = async (req: AuthRequest, res: Response) => {
+  try {
+    const { password } = req.body as { password?: string };
+    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+    if (!password || password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    const db = getDb();
+    const passwordHash = await hashPassword(password);
+    const [updated] = await db
+      .update(users)
+      .set({ passwordHash, updatedAt: new Date() })
+      .where(eq(users.id, req.user.id))
+      .returning();
+
+    return res.status(200).json({ user: publicUser(updated) });
+  } catch (error) {
+    console.error('[updatePassword]', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const updatePublicKey = async (req: AuthRequest, res: Response) => {
+  try {
+    const { publicKey } = req.body as { publicKey?: string };
+    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+    if (!publicKey) return res.status(400).json({ error: 'publicKey required' });
+
+    const db = getDb();
+    const [updated] = await db
+      .update(users)
+      .set({ publicKey, updatedAt: new Date() })
+      .where(eq(users.id, req.user.id))
+      .returning();
+
+    return res.status(200).json({ user: publicUser(updated) });
+  } catch (error) {
+    console.error('[updatePublicKey]', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const updateFcmToken = async (req: AuthRequest, res: Response) => {
+  try {
+    const { fcmToken } = req.body as { fcmToken?: string };
+    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+
+    const db = getDb();
+    await db
+      .update(users)
+      .set({ fcmToken: fcmToken ?? null, updatedAt: new Date() })
+      .where(eq(users.id, req.user.id));
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error('[updateFcmToken]', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/** Search by username, email, or exact user id */
+export const searchUsers = async (req: AuthRequest, res: Response) => {
+  try {
+    const q = String(req.query.q || req.params.query || '').trim();
+    if (!q || q.length < 2) {
+      return res.status(400).json({ error: 'Query must be at least 2 characters' });
+    }
+
+    const db = getDb();
+
+    const byId = await db.query.users.findFirst({ where: eq(users.id, q) });
+    if (byId) {
+      return res.status(200).json(publicUser(byId));
+    }
+
+    const matches = await db
+      .select()
+      .from(users)
+      .where(or(ilike(users.username, `%${q}%`), ilike(users.email, `%${q}%`)))
+      .limit(10);
+
+    if (matches.length === 1) {
+      return res.status(200).json(publicUser(matches[0]));
+    }
+
+    return res.status(200).json({ users: matches.map(publicUser) });
+  } catch (error) {
+    console.error('[searchUsers]', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const getUserByQuery = async (req: AuthRequest, res: Response) => {
+  return searchUsers(req, res);
 };

@@ -13,7 +13,8 @@
     "moduleResolution": "node",
     "baseUrl": ".",
     "paths": {
-      "@wallet-chat/types": ["packages/types"]
+      "@connext/types": ["packages/types"],
+      "@connext/db": ["packages/db/dist"]
     }
   }
 }

@@ -1,225 +1,140 @@
-# 🚀 Wallet Chat: Secure & Decentralized Messenger
+# Connext
 
-Wallet Chat is an innovative end-to-end encrypted chat application that redefines secure communication by integrating directly with cryptocurrency wallets for authentication and identity management. Leveraging cutting-edge blockchain technology and robust encryption, Wallet Chat offers a decentralized platform where users can communicate securely across both EVM-compatible and Solana blockchain ecosystems.
+Connext is a one-to-one, real-time messaging app. It gives people a simple path from creating an account, to finding someone, approving a connection, and having a live conversation.
 
----
+The project is an npm-workspaces monorepo with a Next.js web app, an Express and Socket.IO server, and a PostgreSQL database managed with Drizzle ORM.
 
-## ✨ Features
+## Security status
 
-*   **Wallet-Based Authentication:** Seamlessly connect and authenticate using your Ethereum (EVM) or Solana wallet. Your wallet is your identity.
-*   **End-to-End Encryption (E2EE):** All messages are encrypted client-side, ensuring only the sender and intended recipient can read them. The server stores only encrypted payloads.
-*   **Decentralized Identity:** Register and manage your public encryption keys on-chain via smart contracts, enhancing security and trust.
-*   **Real-time Messaging:** Enjoy instant, real-time communication powered by Socket.IO for a fluid chat experience.
-*   **Cross-Chain Compatibility:** Supports both EVM (Ethereum, Sepolia Testnet) and Solana wallets, bridging different blockchain communities.
-*   **Secure Media Sharing:** Share media files confidently with pre-signed URLs via Cloudflare R2, ensuring secure and controlled access.
-*   **Push Notifications:** Stay updated with important messages through Firebase Cloud Messaging (FCM).
-*   **Robust Backend:** Built with Express/Node.js, MongoDB for message persistence, and Mongoose for data modeling.
-*   **Modern Frontend:** A responsive and intuitive user interface developed with Next.js (web and mobile via Capacitor) and Tailwind CSS.
-*   **Smart Contract Integration:** Utilizes Solidity smart contracts on the Ethereum Sepolia network for key management.
+Connext is **not end-to-end encrypted** right now. The active chat client sends message text as `content`; the server receives it and stores it in PostgreSQL in `message.content`. HTTPS and WSS protect traffic in transit when the app is deployed securely, but the server and anyone with database access can read message contents.
 
-## 💡 Why Wallet Chat?
+The codebase does contain E2EE groundwork: RSA-OAEP browser helpers, a public-key endpoint, and encrypted-content fields. That groundwork is not connected to onboarding or the chat send/receive path, so it is not a working privacy feature yet.
 
-In an era of increasing digital surveillance and data breaches, Wallet Chat stands out by offering:
-*   **Uncompromised Privacy:** E2EE ensures your conversations remain private.
-*   **True Ownership of Identity:** Your wallet serves as your immutable digital identity, eliminating the need for traditional, centralized accounts.
-*   **Resistance to Censorship:** By leveraging decentralized principles, Wallet Chat aims to provide a more resilient communication platform.
-*   **Enhanced Security:** Signature-based authentication prevents common attack vectors, and on-chain key registration adds an extra layer of trust.
+## A quick look
 
----
+<p align="center">
+  <img src="Screenshots/Signin.png" alt="Connext sign-in screen" width="48%" />
+  <img src="Screenshots/Sign-up.png" alt="Connext account creation screen" width="48%" />
+</p>
 
-## 📸 Screenshots / Demos
+<p align="center">
+  <img src="Screenshots/Dashboard.png" alt="Connext chat dashboard" width="48%" />
+  <img src="Screenshots/Chatbox.png" alt="Connext conversation screen" width="48%" />
+</p>
 
-*(To be added: Include screenshots or short GIF/video demonstrations of the application in action. Showcase wallet connection, chat interface, and media sharing.)*
+<p align="center">
+  <img src="Screenshots/Requests.png" alt="Connext connection requests screen" width="48%" />
+  <img src="Screenshots/Search.png" alt="Connext people search screen" width="48%" />
+</p>
 
----
+## What is working
 
-## ⚙️ Getting Started
+- Username-and-password signup with no email required.
+- Sign-in with a username or email and password.
+- Optional Google OAuth and six-digit email-code sign-in when configured.
+- Password recovery through the email-code flow.
+- Username onboarding, people search, and chat requests.
+- Reusable invite links that expire after seven days.
+- One-to-one real-time text chat through Socket.IO.
+- Unread counts plus sent, delivered, and read message states.
+- Browser notifications for live incoming messages while the app is open.
 
-Follow these steps to set up and run the Wallet Chat application locally.
+People can only message after they have an accepted connection. Each pair has a stable room ID and a separate conversation history.
+
+### Implemented on the server, not yet exposed in chat
+
+The server has Cloudflare R2 media endpoints, Firebase Cloud Messaging endpoints, contact renaming/disconnecting, and typing events. The checked-in chat UI is text-only: it has no file picker, does not register an FCM token, and does not show typing indicators or contact-management controls. These are API capabilities, not completed web-app features.
+
+## Project layout
+
+| Path | Purpose |
+| --- | --- |
+| `apps/web` | Next.js web app, Auth.js sign-in, onboarding, dashboard, and chat |
+| `apps/server` | Express API, Socket.IO gateway, media, and notification endpoints |
+| `packages/db` | PostgreSQL schema, Drizzle client, room helpers, and password helpers |
+| `packages/types` | Shared TypeScript types |
+| `Screenshots` | Images used in this README |
+
+The web app normally runs on port `3000`; the API and Socket.IO server run on port `4001`.
+
+## Run locally
 
 ### Prerequisites
 
-*   **Node.js**: v18.x or later (includes npm)
-*   **npm**: v9.x or later
-*   **MongoDB**: An instance of MongoDB (local or cloud-hosted)
-*   **Git**: For cloning the repository
-*   **MetaMask / Phantom Wallet**: For testing wallet connections.
+- A current Node.js LTS release
+- npm
+- PostgreSQL
 
-### Installation
+Google OAuth and SMTP are optional. Username-and-password signup does not need either provider.
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/saif634/Wallet-Chat.git
-    cd Wallet-Chat
-    ```
-2.  **Install root dependencies:**
-    ```bash
-    npm install
-    ```
-3.  **Install sub-project dependencies:**
-    ```bash
-    npm install --workspace apps/server
-    npm install --workspace apps/web
-    npm install --workspace packages/contracts-solidity
-    npm install --workspace packages/types
-    ```
+### Install and configure
 
-### Configuration
+```bash
+git clone https://github.com/saif634/Connext.git
+cd Connext
+npm install
+```
 
-Each application within the monorepo requires specific environment variables. Create `.env` files based on the provided `.env.example` files in each respective directory. Refer to the existing `README.md` for detailed variable descriptions.
+Create `apps/web/.env.local` and `apps/server/.env`. Keep them local. The web app and API need the same `AUTH_SECRET`; the API also needs a strong `JWT_SECRET`.
 
-*   `apps/server/.env`
-*   `apps/web/.env`
-*   `packages/contracts-solidity/.env`
+```dotenv
+# apps/web/.env.local
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/connext
+AUTH_SECRET=replace-with-a-long-random-value
+NEXT_PUBLIC_SERVER_URL=http://localhost:4001
 
-### Running the Applications
+# apps/server/.env
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/connext
+AUTH_SECRET=replace-with-the-same-auth-secret
+JWT_SECRET=replace-with-another-long-random-value
+ALLOWED_ORIGINS=http://localhost:3000
+```
 
-For a full development environment, you can run both the backend and frontend simultaneously, or start them independently.
+Add `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` in the web environment for Google sign-in. Add `EMAIL_SERVER` and optionally `EMAIL_FROM` for email-code sign-in.
 
-1.  **Start Both Backend and Frontend (Recommended for Development):**
-    ```bash
-    npm run dev
-    ```
-    This command will concurrently start the backend server (default `http://localhost:4001`) and the frontend web application (default `http://localhost:3000`).
+```bash
+npm run db:push
+npm run dev
+```
 
-2.  **Start the Backend Server Independently:**
-    ```bash
-    npm run dev:server
-    ```
-    The server should start on the port specified in `apps/server/.env` (default `4001`).
+Use `npm run dev:web` or `npm run dev:server` to run one side independently. Once PostgreSQL is reachable and the API has started, `http://localhost:4001/health` returns `{ "ok": true }`.
 
-3.  **Start the Frontend Web Application Independently:**
-    ```bash
-    npm run dev:web
-    ```
-    The web application should start on `http://localhost:3000` (default for Next.js).
+## Configuration
 
-4.  **Compile Smart Contracts:**
-    ```bash
-    cd packages/contracts-solidity
-    npx hardhat compile
-    ```
+| Variable | Used by | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | web, server | PostgreSQL connection string |
+| `AUTH_SECRET` | web, server | Auth.js secret and API-bridge signing key |
+| `JWT_SECRET` | server | Signs the API session cookie |
+| `JWT_EXPIRES_DAYS` | server | API JWT lifetime, default `7d` |
+| `NEXT_PUBLIC_SERVER_URL` | web | Public API URL |
+| `PORT` | server | API port, default `4001` |
+| `ALLOWED_ORIGINS` | server | Production CORS allowlist |
+| `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` | web | Enables Google OAuth |
+| `EMAIL_SERVER`, `EMAIL_FROM` | web | Enables the SMTP email-code provider |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | server | Enables the R2 media API |
+| `R2_REGION`, `R2_SIGNED_URL_TTL_SECONDS`, `MAX_MEDIA_FILE_BYTES` | server | R2 settings |
+| `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY` | server | Enables the FCM API |
 
-5.  **Deploy Smart Contracts (Development):**
-    ```bash
-    cd packages/contracts-solidity
-    npx hardhat run scripts/deploy.ts --network sepolia
-    ```
-    *(Ensure `PRIVATE_KEY` and `RPC_URL` are configured in `packages/contracts-solidity/.env` for the target network).*
+## How sign-in reaches the API
 
----
+Auth.js handles browser sign-in. After a person signs in, the web app asks `/api/auth/bridge` for a 60-second HMAC-signed payload and posts it to the Express server at `/auth/bridge`. The server verifies that payload, creates or updates the user, and sets an `httpOnly` JWT cookie. Later REST calls and Socket.IO connections use that API cookie.
 
-## 🛠️ Tech Stack & Architecture
+## Commands
 
-Wallet Chat is built as a robust monorepo, orchestrating multiple services to deliver a seamless decentralized chat experience.
+```bash
+npm run dev          # Build the database package, then run web and server
+npm run dev:web      # Build the database package, then run Next.js
+npm run dev:server   # Build the database package, then run Express and Socket.IO
+npm run db:push      # Apply the Drizzle schema to PostgreSQL
+npm run build        # Build all workspaces
+npm run lint         # Run workspace lint scripts
+```
 
-#### Monorepo Root
-*   `npm`: Workspace management
-*   `TypeScript`: Core language for type safety across the project
+At the current revision, `npm run lint --workspace=connext-web` fails before linting because the legacy `next lint` command cannot serialize `apps/web/.eslintrc.json` (a circular ESLint configuration error). The lint setup needs migration to the ESLint CLI.
 
-#### `apps/server` (Backend - Express/Node.js)
-*   **Language**: TypeScript
-*   **Framework**: Express.js
-*   **Database**: MongoDB (via Mongoose ORM)
-*   **Authentication**: JWT, Nacl (Solana), Ethers (EVM)
-*   **Real-time**: Socket.IO
-*   **Cloud Storage**: AWS SDK (S3 client for Cloudflare R2)
-*   **Notifications**: Firebase Admin SDK (FCM)
-*   **Security**: Helmet, Compression, Express Rate Limit
+## Deployment
 
-#### `apps/web` (Frontend - Next.js/React)
-*   **Language**: TypeScript
-*   **Framework**: Next.js, React
-*   **Styling**: Tailwind CSS
-*   **Web3**: Wagmi, Viem, Web3Modal, `@solana/web3.js` (for cross-chain wallet integration)
-*   **Hybrid Mobile**: Capacitor (for Android & iOS builds)
-*   **State Management**: `@tanstack/react-query`
+Deploy `apps/web` as a Next.js application and `apps/server` as a Node.js service. Both need the same PostgreSQL database. In production, use HTTPS, set an exact `ALLOWED_ORIGINS` value, configure `NEXT_PUBLIC_SERVER_URL` with the public API URL, and make OAuth redirect URLs match the web deployment.
 
-#### `packages/contracts-solidity` (Smart Contracts)
-*   **Language**: Solidity
-*   **Framework**: Hardhat
-*   **Testing**: Chai, Mocha
-*   **Tooling**: Typechain (for TypeScript bindings)
-
-#### `packages/types` (Shared Types)
-*   **Language**: TypeScript
-*   **Purpose**: Centralized type definitions for consistency across the monorepo.
-
----
-
-## 🔑 Authentication Flow
-
-Wallet Chat's authentication is entirely wallet-driven, providing a secure and decentralized identity layer:
-
-1.  **Wallet Connection**: User connects their EVM or Solana wallet via the frontend.
-2.  **Nonce Request**: Frontend requests a unique `nonce` from the backend, associated with the user's public address.
-3.  **Signature Generation**: User signs the `nonce` message with their connected wallet.
-4.  **Signature Verification**: The signed message is sent to the backend for cryptographic verification against the stored `nonce`.
-5.  **JWT Issuance**: Upon successful verification, the backend issues a JSON Web Token (JWT) for session management.
-6.  **Public Key Management**: Users can register and retrieve their public encryption keys on the blockchain via the `ChatRegistry` smart contract, or store them on the server.
-
----
-
-## 💬 Chat System
-
-The chat system employs a hybrid approach for efficiency and reliability:
-
-*   **Real-time Communication**: Primarily uses **Socket.IO** for instant message delivery and real-time status updates between online users.
-*   **Message Persistence**: All messages are securely stored in a **MongoDB database** (encrypted, of course). Historical messages are fetched via a REST API.
-*   **End-to-End Encryption**: Messages are encrypted on the sender's device and decrypted only by the recipient, ensuring maximum privacy. The server never has access to the unencrypted content.
-
----
-
-## 🔗 Blockchain Integration
-
-Wallet Chat leverages blockchain for core functionalities:
-
-*   **Identity & Key Management**: The `ChatRegistry.sol` smart contract on the Ethereum Sepolia Testnet allows users to register and retrieve their public encryption keys directly on-chain.
-    *   `registerIdentity(bytes calldata _encryptionKey)`: Registers/updates a user's E2EE public key.
-    *   `getEncryptionKey(address _user)`: Retrieves a user's registered public key.
-*   **Wallet Compatibility**: Supports widely used wallets like MetaMask, WalletConnect, Coinbase Wallet, and Phantom (Solana).
-
----
-
-## 🧪 Testing & Quality Assurance
-
-The project includes various testing and quality assurance mechanisms to ensure reliability, correctness, and maintainability:
-
-*   **Smart Contract Tests**: Comprehensive tests for `ChatRegistry.sol` using Hardhat, Mocha, and Chai ensure contract logic is sound and secure.
-*   **Code Linting**: The project uses `npm run lint` across all workspaces to maintain code quality and consistency.
-*   **Unit & Integration Tests**: (Further details on specific unit/integration test frameworks for frontend and backend could be added here if implemented, e.g., Jest/React Testing Library for frontend, Mocha/Chai for backend API endpoints.)
-
----
-
-## 🚀 Deployment
-
-The monorepo structure facilitates independent deployment of its components:
-
-*   **Backend (`apps/server`)**: Can be deployed to any Node.js compatible environment (e.g., Vercel, Render, AWS, Google Cloud). Requires MongoDB and Cloudflare R2 configurations.
-*   **Frontend (`apps/web`)**: Designed for deployment as a Next.js application (e.g., Vercel, Netlify). Can also be bundled into native Android/iOS apps using Capacitor.
-*   **Smart Contracts (`packages/contracts-solidity`)**: Deployed to the Ethereum Sepolia Testnet.
-
----
-
-## ✍️ Author
-
-**[Your Name/Alias]**
-*   **GitHub**: [Your GitHub Profile Link]
-*   **LinkedIn**: [Your LinkedIn Profile Link]
-*   **Portfolio/Website**: [Your Personal Website/Portfolio Link]
-*   **Email**: [Your Email Address]
-
----
-
-## 📜 Full Documentation & API Reference
-
-For detailed API endpoints, database schemas, and in-depth architectural explanations, please refer to the comprehensive documentation within this `README.md` itself or `documentation.md` for internal development notes.
-
----
-
-## 🙏 Acknowledgments
-
-*   **Cloudflare R2**: For secure and cost-effective media storage.
-*   **Firebase**: For robust push notification services.
-*   **The Web3 Ecosystem**: For empowering decentralized applications.
-*   **All open-source contributors** and communities behind the libraries and frameworks used.
+Before presenting Connext as a private messenger, complete and independently review the E2EE work. Until then, it is accurately described as a real-time chat app with encrypted transport in an HTTPS deployment, not an end-to-end encrypted messenger.

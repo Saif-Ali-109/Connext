@@ -1,9 +1,0 @@
-{
-  "name": "@wallet-chat/android",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "doctor": "echo \"Use Android Studio/Gradle from apps/android\"",
-    "build": "echo \"Run ./gradlew assembleDebug from apps/android\""
-  }
-}

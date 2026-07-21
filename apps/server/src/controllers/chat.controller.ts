@@ -1,115 +1,136 @@
 import { Response } from 'express';
-import { User } from '../models/User';
-import { ChatRequest } from '../models/ChatRequest';
-import { Message } from '../models/Message';
+import { and, eq, or, ne, count, desc } from 'drizzle-orm';
+import {
+  users,
+  messages,
+  chatRequests,
+  invites,
+  getRoomId,
+  isParticipantRoomId,
+} from '@connext/db';
 import { AuthRequest } from '../middleware/auth.middleware';
-import mongoose from 'mongoose';
-
-// Validation regex patterns
-const ROOM_ID_REGEX = /^0x[a-fA-F0-9]+-0x[a-fA-F0-9]+$/;
-const PUBLIC_KEY_REGEX = /^[0-9a-zA-Z+/=]+$/; // Base64url or hex format
+import { getDb } from '../lib/constants';
+import crypto from 'crypto';
 
 const getAuthenticatedUserId = (req: AuthRequest): string =>
-  String(req.user?.id || req.user?._id || '');
+  String(req.user?.id || '');
 
-const isParticipant = (chatReq: { from: { toString(): string }, to: { toString(): string } }, userId: string) =>
-  chatReq.from.toString() === userId || chatReq.to.toString() === userId;
+const publicUser = (row: typeof users.$inferSelect) => ({
+  id: row.id,
+  email: row.email,
+  name: row.name,
+  username: row.username,
+  displayName: row.displayName || row.name,
+  avatarUrl: row.avatarUrl || row.image,
+  publicKey: row.publicKey,
+});
 
-const getRoomIdForWallets = (walletA: string, walletB: string) =>
-  [walletA.toLowerCase().trim(), walletB.toLowerCase().trim()].sort().join('-');
+const isHiddenBy = (hiddenBy: string[] | null | undefined, userId: string) =>
+  (hiddenBy ?? []).includes(userId);
 
 export const sendRequest = async (req: AuthRequest, res: Response) => {
   try {
-    const { fromUserId, toPublicKey } = req.body;
+    const { toUserId, toUsername } = req.body as {
+      fromUserId?: string;
+      toUserId?: string;
+      toUsername?: string;
+      toPublicKey?: string; // legacy alias
+    };
     const authenticatedUserId = getAuthenticatedUserId(req);
 
     if (!authenticatedUserId) {
       return res.status(401).json({ error: 'Unauthorized: No active session' });
     }
 
-    if (!toPublicKey) {
-      return res.status(400).json({ error: 'Recipient public key is required' });
-    }
-
-    if (fromUserId && String(fromUserId) !== authenticatedUserId) {
-      return res.status(403).json({ error: 'Forbidden: sender does not match authenticated session' });
-    }
-
-    const fromUser = await User.findById(authenticatedUserId);
+    const db = getDb();
+    const fromUser = await db.query.users.findFirst({
+      where: eq(users.id, authenticatedUserId),
+    });
     if (!fromUser) return res.status(404).json({ error: 'Sender not found' });
 
-    // Robust recipient lookup: try publicKey, then try as publicAddress
-    let toUser = await User.findOne({ publicKey: toPublicKey });
-    
-    if (!toUser) {
-      console.log('[sendRequest] Recipient not found by PK, trying publicAddress...');
-      toUser = await User.findOne({ publicAddress: toPublicKey });
+    const lookup = toUserId || toUsername || req.body.toPublicKey;
+    if (!lookup) {
+      return res.status(400).json({ error: 'Recipient is required' });
     }
 
-    if (!toUser) return res.status(404).json({ error: 'Recipient not found on this platform' });
+    let toUser =
+      (await db.query.users.findFirst({ where: eq(users.id, String(lookup)) })) ||
+      (await db.query.users.findFirst({
+        where: eq(users.username, String(lookup).toLowerCase()),
+      }));
 
-    if (fromUser._id.toString() === toUser._id.toString()) {
+    if (!toUser) {
+      return res.status(404).json({ error: 'Recipient not found on this platform' });
+    }
+
+    if (fromUser.id === toUser.id) {
       return res.status(400).json({ error: 'Cannot send request to yourself' });
     }
 
-    // Check for existing request in either direction
-    const existing = await ChatRequest.findOne({
-      $or: [
-        { from: fromUser._id, to: toUser._id },
-        { from: toUser._id, to: fromUser._id }
-      ]
+    const existing = await db.query.chatRequests.findFirst({
+      where: or(
+        and(eq(chatRequests.fromUserId, fromUser.id), eq(chatRequests.toUserId, toUser.id)),
+        and(eq(chatRequests.fromUserId, toUser.id), eq(chatRequests.toUserId, fromUser.id))
+      ),
     });
 
     if (existing) {
-      const isHiddenBySender = existing.hiddenBy?.some(
-        (id) => id.toString() === fromUser._id.toString()
-      );
-
-      if (isHiddenBySender) {
-        // Reconnecting after a user intentionally hid an accepted chat should
-        // require a new pending request instead of silently restoring the chat.
-        existing.status = 'pending';
-        existing.from = fromUser._id;
-        existing.to = toUser._id;
-        existing.fromWallet = fromUser.publicAddress;
-        existing.toWallet = toUser.publicAddress;
-        existing.hiddenBy = [];
-        await existing.save();
-        return res.status(200).json({ message: 'Request re-opened', request: existing });
+      if (isHiddenBy(existing.hiddenBy, fromUser.id)) {
+        const [updated] = await db
+          .update(chatRequests)
+          .set({
+            status: 'pending',
+            fromUserId: fromUser.id,
+            toUserId: toUser.id,
+            hiddenBy: [],
+            updatedAt: new Date(),
+          })
+          .where(eq(chatRequests.id, existing.id))
+          .returning();
+        return res.status(200).json({ message: 'Request re-opened', request: updated });
       }
 
       if (existing.status === 'accepted') {
         return res.status(400).json({ error: 'Chat already accepted' });
       }
-      
-      // Mutual pending request: automatically accept it
+
       if (existing.status === 'pending') {
-        if (existing.to.toString() === fromUser._id.toString()) {
-           existing.status = 'accepted';
-           await existing.save();
-           return res.status(200).json({ message: 'Mutual request found, chat automatically accepted', request: existing });
+        if (existing.toUserId === fromUser.id) {
+          const [updated] = await db
+            .update(chatRequests)
+            .set({ status: 'accepted', updatedAt: new Date() })
+            .where(eq(chatRequests.id, existing.id))
+            .returning();
+          return res.status(200).json({
+            message: 'Mutual request found, chat automatically accepted',
+            request: updated,
+          });
         }
         return res.status(400).json({ error: 'Request already pending' });
       }
-      
-      // If rejected, allow re-requesting
-      existing.status = 'pending';
-      existing.from = fromUser._id;
-      existing.to = toUser._id;
-      existing.fromWallet = fromUser.publicAddress;
-      existing.toWallet = toUser.publicAddress;
-      existing.hiddenBy = []; // Reset hidden status on new request
-      await existing.save();
-      return res.status(200).json(existing);
+
+      const [updated] = await db
+        .update(chatRequests)
+        .set({
+          status: 'pending',
+          fromUserId: fromUser.id,
+          toUserId: toUser.id,
+          hiddenBy: [],
+          updatedAt: new Date(),
+        })
+        .where(eq(chatRequests.id, existing.id))
+        .returning();
+      return res.status(200).json(updated);
     }
 
-    const newRequest = await ChatRequest.create({
-      from: fromUser._id,
-      to: toUser._id,
-      fromWallet: fromUser.publicAddress,
-      toWallet: toUser.publicAddress,
-      status: 'pending',
-    });
+    const [newRequest] = await db
+      .insert(chatRequests)
+      .values({
+        fromUserId: fromUser.id,
+        toUserId: toUser.id,
+        status: 'pending',
+      })
+      .returning();
 
     return res.status(201).json(newRequest);
   } catch (error) {
@@ -120,28 +141,37 @@ export const sendRequest = async (req: AuthRequest, res: Response) => {
 
 export const respondToRequest = async (req: AuthRequest, res: Response) => {
   try {
-    const { requestId, status } = req.body;
+    const { requestId, status } = req.body as {
+      requestId?: string;
+      status?: string;
+    };
     const authenticatedUserId = getAuthenticatedUserId(req);
 
     if (!authenticatedUserId) {
       return res.status(401).json({ error: 'Unauthorized: No active session' });
     }
 
-    if (!['accepted', 'rejected'].includes(status)) {
+    if (!status || !['accepted', 'rejected'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
-    const chatReq = await ChatRequest.findById(requestId);
+    const db = getDb();
+    const chatReq = await db.query.chatRequests.findFirst({
+      where: eq(chatRequests.id, String(requestId)),
+    });
     if (!chatReq) return res.status(404).json({ error: 'Request not found' });
 
-    if (chatReq.to.toString() !== authenticatedUserId) {
+    if (chatReq.toUserId !== authenticatedUserId) {
       return res.status(403).json({ error: 'Forbidden: only the request recipient can respond' });
     }
 
-    chatReq.status = status;
-    await chatReq.save();
+    const [updated] = await db
+      .update(chatRequests)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(chatRequests.id, chatReq.id))
+      .returning();
 
-    return res.status(200).json(chatReq);
+    return res.status(200).json(updated);
   } catch (error) {
     console.error('Error in respondToRequest:', error);
     return res.status(500).json({ error: 'Internal server error' });
@@ -150,43 +180,51 @@ export const respondToRequest = async (req: AuthRequest, res: Response) => {
 
 export const getRequests = async (req: AuthRequest, res: Response) => {
   try {
-    const { userId } = req.query;
     const authenticatedUserId = getAuthenticatedUserId(req);
-
     if (!authenticatedUserId) {
       return res.status(401).json({ error: 'Unauthorized: No active session' });
     }
 
-    if (userId && String(userId).toLowerCase() !== authenticatedUserId.toLowerCase()) {
-      return res.status(403).json({ error: 'Forbidden: userId does not match authenticated session' });
+    const db = getDb();
+    const all = await db.select().from(chatRequests).where(
+      or(
+        eq(chatRequests.fromUserId, authenticatedUserId),
+        eq(chatRequests.toUserId, authenticatedUserId)
+      )
+    );
+
+    const userIds = new Set<string>();
+    for (const r of all) {
+      userIds.add(r.fromUserId);
+      userIds.add(r.toUserId);
     }
 
-    const user = await User.findById(authenticatedUserId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    const userMap = new Map<string, ReturnType<typeof publicUser>>();
+    for (const id of userIds) {
+      const u = await db.query.users.findFirst({ where: eq(users.id, id) });
+      if (u) userMap.set(id, publicUser(u));
+    }
 
-    // Incoming requests for the user (not hidden by user)
-    const incoming = await ChatRequest.find({ 
-      to: new mongoose.Types.ObjectId(authenticatedUserId), 
-      status: 'pending',
-      hiddenBy: { $ne: new mongoose.Types.ObjectId(authenticatedUserId) }
-    }).populate('from', 'publicAddress publicKey username');
-    
-    // Outgoing requests from the user
-    const outgoing = await ChatRequest.find({ 
-      from: new mongoose.Types.ObjectId(authenticatedUserId),
-      status: 'pending',
-      hiddenBy: { $ne: new mongoose.Types.ObjectId(authenticatedUserId) }
-    }).populate('to', 'publicAddress publicKey username');
+    const hydrate = (r: typeof chatRequests.$inferSelect) => ({
+      ...r,
+      from: userMap.get(r.fromUserId),
+      to: userMap.get(r.toUserId),
+      // legacy-shaped fields for older UI
+      fromWallet: r.fromUserId,
+      toWallet: r.toUserId,
+    });
 
-    // Accepted contacts (either direction), not hidden by this user
-    const contacts = await ChatRequest.find({
-      $or: [
-        { from: new mongoose.Types.ObjectId(authenticatedUserId) },
-        { to: new mongoose.Types.ObjectId(authenticatedUserId) }
-      ],
-      status: 'accepted',
-      hiddenBy: { $ne: new mongoose.Types.ObjectId(authenticatedUserId) }
-    }).populate('from to', 'publicAddress publicKey username');
+    const visible = all.filter((r) => !isHiddenBy(r.hiddenBy, authenticatedUserId));
+
+    const incoming = visible
+      .filter((r) => r.toUserId === authenticatedUserId && r.status === 'pending')
+      .map(hydrate);
+    const outgoing = visible
+      .filter((r) => r.fromUserId === authenticatedUserId && r.status === 'pending')
+      .map(hydrate);
+    const contacts = visible
+      .filter((r) => r.status === 'accepted')
+      .map(hydrate);
 
     return res.status(200).json({ incoming, outgoing, contacts });
   } catch (error) {
@@ -198,72 +236,87 @@ export const getRequests = async (req: AuthRequest, res: Response) => {
 export const getMessages = async (req: AuthRequest, res: Response) => {
   try {
     const { roomId } = req.params;
-    const { currentUserId } = req.query;
     const authenticatedUserId = getAuthenticatedUserId(req);
 
     if (!authenticatedUserId) {
       return res.status(401).json({ error: 'Unauthorized: No active session' });
     }
 
-    if (currentUserId && String(currentUserId) !== authenticatedUserId) {
-      return res.status(403).json({ error: 'Forbidden: currentUserId does not match authenticated session' });
+    if (!roomId || !isParticipantRoomId(roomId, authenticatedUserId)) {
+      return res.status(400).json({ error: 'Invalid Room ID' });
     }
 
-    if (!roomId) {
-      return res.status(400).json({ error: 'Room ID is required' });
+    const db = getDb();
+    const parts = roomId.split('_');
+    const otherId = parts.find((p) => p !== authenticatedUserId);
+    if (!otherId) {
+      return res.status(400).json({ error: 'Invalid Room ID' });
     }
 
-    // Validate roomId format (two wallet addresses separated by dash)
-    if (!ROOM_ID_REGEX.test(roomId)) {
-      return res.status(400).json({ error: 'Invalid Room ID format' });
-    }
+    const connection = await db.query.chatRequests.findFirst({
+      where: and(
+        or(
+          and(
+            eq(chatRequests.fromUserId, authenticatedUserId),
+            eq(chatRequests.toUserId, otherId)
+          ),
+          and(
+            eq(chatRequests.fromUserId, otherId),
+            eq(chatRequests.toUserId, authenticatedUserId)
+          )
+        ),
+        eq(chatRequests.status, 'accepted')
+      ),
+    });
 
-    const user = await User.findById(authenticatedUserId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const acceptedChats = await ChatRequest.find({
-      $or: [{ from: authenticatedUserId }, { to: authenticatedUserId }],
-      status: 'accepted',
-      hiddenBy: { $ne: authenticatedUserId }
-    }).select('fromWallet toWallet');
-
-    const isAuthorizedForRoom = acceptedChats.some((chatReq) =>
-      getRoomIdForWallets(chatReq.fromWallet, chatReq.toWallet) === roomId
-    );
-
-    if (!isAuthorizedForRoom) {
+    if (!connection || isHiddenBy(connection.hiddenBy, authenticatedUserId)) {
       return res.status(403).json({ error: 'Forbidden: no accepted connection for this room' });
     }
-    
+
+    // Opening the conversation marks the other participant's messages as read.
+    await db
+      .update(messages)
+      .set({ read: true })
+      .where(
+        and(
+          eq(messages.roomId, roomId),
+          ne(messages.senderId, authenticatedUserId),
+          eq(messages.read, false)
+        )
+      );
+
     const pageNum = parseInt(req.query.page as string) || 1;
     const limitNum = parseInt(req.query.limit as string) || 20;
-    const skip = (pageNum - 1) * limitNum;
+    const offset = (pageNum - 1) * limitNum;
 
-    const totalCount = await Message.countDocuments({ roomId });
+    const [{ value: totalCount }] = await db
+      .select({ value: count() })
+      .from(messages)
+      .where(eq(messages.roomId, roomId));
 
-    const messages = await Message.find({ roomId })
-      .sort({ timestamp: -1 })
-      .skip(skip)
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.roomId, roomId))
+      .orderBy(desc(messages.timestamp))
       .limit(limitNum)
-      .populate('sender', 'publicAddress username displayName');
+      .offset(offset);
 
-    const formattedMessages = messages.map((msg) => ({
-      id: msg._id.toString(),
-      sender: msg.sender.toString() === authenticatedUserId ? 'me' : 'other',
-      text: msg.encryptedContent,
+    const formattedMessages = rows.map((msg) => ({
+      id: msg.id,
+      sender: msg.senderId === authenticatedUserId ? 'me' : 'other',
+      text: msg.content || msg.encryptedContent || '',
       encryptedContentForSender: msg.encryptedContentForSender,
       createdAt: msg.timestamp,
-      deliveryState: msg.read ? 'read' : 'delivered'
+      deliveryState: msg.read ? 'read' : msg.deliveredAt ? 'delivered' : 'sent',
     }));
 
     return res.status(200).json({
       messages: formattedMessages,
-      totalCount,
+      totalCount: Number(totalCount),
       page: pageNum,
       limit: limitNum,
-      hasMore: skip + messages.length < totalCount,
+      hasMore: offset + rows.length < Number(totalCount),
     });
   } catch (error) {
     console.error('Error in getMessages:', error);
@@ -273,81 +326,88 @@ export const getMessages = async (req: AuthRequest, res: Response) => {
 
 export const sendMessage = async (req: AuthRequest, res: Response) => {
   try {
-    const { senderId, recipientPublicKey, encryptedContent, encryptedContentForSender, encryptedMediaMeta } = req.body;
-    const authenticatedUserId = String(req.user?.id || req.user?._id || '');
-    console.log('[REST sendMessage] Request received from senderId:', senderId);
-    console.log('[REST sendMessage] Recipient PK starts with:', recipientPublicKey?.substring(0, 20));
+    const {
+      senderId,
+      recipientUserId,
+      content,
+      encryptedContent,
+      encryptedContentForSender,
+    } = req.body as {
+      senderId?: string;
+      recipientUserId?: string;
+      recipientPublicKey?: string;
+      content?: string;
+      encryptedContent?: string;
+      encryptedContentForSender?: string;
+    };
 
-    if (!senderId || !recipientPublicKey || !encryptedContent) {
-      console.error('[REST sendMessage] Missing fields');
-      return res.status(400).json({ error: 'senderId, recipientPublicKey, and encryptedContent are required' });
+    const authenticatedUserId = getAuthenticatedUserId(req);
+    if (!authenticatedUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Validate senderId matches authenticated user
-    if (!authenticatedUserId || authenticatedUserId !== String(senderId)) {
-      console.error('[REST sendMessage] Sender/token mismatch', {
-        authenticatedUserId,
-      });
+    if (senderId && String(senderId) !== authenticatedUserId) {
       return res.status(403).json({ error: 'Forbidden: sender does not match authenticated session' });
     }
 
-    // Validate recipientPublicKey format (base64 or hex)
-    if (!PUBLIC_KEY_REGEX.test(recipientPublicKey)) {
-      return res.status(400).json({ error: 'Invalid recipientPublicKey format' });
+    const recipientLookup = recipientUserId || req.body.recipientPublicKey;
+    if (!recipientLookup) {
+      return res.status(400).json({ error: 'recipientUserId is required' });
     }
 
-    const sender = await User.findById(authenticatedUserId);
-    if (!sender) {
-      console.error('[REST sendMessage] Sender not found:', authenticatedUserId);
-      return res.status(404).json({ error: 'Sender not found' });
+    const bodyText = content || encryptedContent;
+    if (!bodyText) {
+      return res.status(400).json({ error: 'content is required' });
     }
 
-    // Robust recipient lookup: try publicKey, then try as publicAddress
-    let recipient = await User.findOne({ publicKey: recipientPublicKey });
-    
-    if (!recipient) {
-      console.log('[REST sendMessage] Recipient not found by PK, trying publicAddress...');
-      recipient = await User.findOne({ publicAddress: recipientPublicKey });
-    }
+    const db = getDb();
+    const recipient =
+      (await db.query.users.findFirst({ where: eq(users.id, String(recipientLookup)) })) ||
+      (await db.query.users.findFirst({
+        where: eq(users.username, String(recipientLookup).toLowerCase()),
+      }));
 
     if (!recipient) {
-      console.error('[REST sendMessage] Recipient not found');
       return res.status(404).json({ error: 'Recipient not found' });
     }
 
-    console.log('[REST sendMessage] Found recipient:', recipient.publicAddress);
-
-    // Verify accepted connection
-    const request = await ChatRequest.findOne({
-      $or: [
-        { from: sender._id, to: recipient._id },
-        { from: recipient._id, to: sender._id }
-      ],
-      status: 'accepted'
+    const request = await db.query.chatRequests.findFirst({
+      where: and(
+        or(
+          and(
+            eq(chatRequests.fromUserId, authenticatedUserId),
+            eq(chatRequests.toUserId, recipient.id)
+          ),
+          and(
+            eq(chatRequests.fromUserId, recipient.id),
+            eq(chatRequests.toUserId, authenticatedUserId)
+          )
+        ),
+        eq(chatRequests.status, 'accepted')
+      ),
     });
 
     if (!request) {
-      console.error('[REST sendMessage] No accepted connection found');
       return res.status(403).json({ error: 'No accepted connection between these users' });
     }
 
-    const roomId = [sender.publicAddress.toLowerCase(), recipient.publicAddress.toLowerCase()].sort().join('-');
+    const roomId = getRoomId(authenticatedUserId, recipient.id);
 
-    const newMessage = await Message.create({
-      sender: sender._id,
-      roomId,
-      encryptedContent,
-      encryptedContentForSender: encryptedContentForSender || null,
-      timestamp: new Date(),
-    });
+    const [newMessage] = await db
+      .insert(messages)
+      .values({
+        senderId: authenticatedUserId,
+        roomId,
+        content: content || bodyText,
+        encryptedContent: encryptedContent || null,
+        encryptedContentForSender: encryptedContentForSender || null,
+      })
+      .returning();
 
     return res.status(202).json({
-      relayOnly: false,
-      queuedOnClient: false,
       roomId,
-      messageId: newMessage._id,
-      hasEncryptedMediaMeta: !!encryptedMediaMeta,
-      message: 'Message persisted to database.'
+      messageId: newMessage.id,
+      message: 'Message persisted to database.',
     });
   } catch (error) {
     console.error('[REST sendMessage] CRITICAL ERROR:', error);
@@ -359,22 +419,24 @@ export const removeRequest = async (req: AuthRequest, res: Response) => {
   try {
     const { requestId } = req.params;
     const authenticatedUserId = getAuthenticatedUserId(req);
-
     if (!authenticatedUserId) {
       return res.status(401).json({ error: 'Unauthorized: No active session' });
     }
 
-    if (!requestId) return res.status(400).json({ error: 'Request ID is required' });
-
-    const chatReq = await ChatRequest.findById(requestId);
+    const db = getDb();
+    const chatReq = await db.query.chatRequests.findFirst({
+      where: eq(chatRequests.id, requestId),
+    });
     if (!chatReq) return res.status(404).json({ error: 'Request not found' });
 
-    if (!isParticipant(chatReq, authenticatedUserId)) {
+    if (
+      chatReq.fromUserId !== authenticatedUserId &&
+      chatReq.toUserId !== authenticatedUserId
+    ) {
       return res.status(403).json({ error: 'Forbidden: you are not part of this request' });
     }
 
-    await chatReq.deleteOne();
-
+    await db.delete(chatRequests).where(eq(chatRequests.id, requestId));
     return res.status(200).json({ message: 'Connection removed successfully' });
   } catch (error) {
     console.error('Error in removeRequest:', error);
@@ -384,52 +446,47 @@ export const removeRequest = async (req: AuthRequest, res: Response) => {
 
 export const getUnreadMessageCounts = async (req: AuthRequest, res: Response) => {
   try {
-    const { userId } = req.query;
     const authenticatedUserId = getAuthenticatedUserId(req);
-
     if (!authenticatedUserId) {
       return res.status(401).json({ error: 'Unauthorized: No active session' });
     }
 
-    if (userId && String(userId) !== authenticatedUserId) {
-      return res.status(403).json({ error: 'Forbidden: userId does not match authenticated session' });
-    }
-
-    const user = await User.findById(authenticatedUserId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Find all accepted connections for this user
-    const userObjectId = new mongoose.Types.ObjectId(authenticatedUserId);
-    const acceptedRequests = await ChatRequest.find({
-      $or: [{ from: userObjectId }, { to: userObjectId }],
-      status: 'accepted'
-    });
+    const db = getDb();
+    const accepted = await db
+      .select()
+      .from(chatRequests)
+      .where(
+        and(
+          or(
+            eq(chatRequests.fromUserId, authenticatedUserId),
+            eq(chatRequests.toUserId, authenticatedUserId)
+          ),
+          eq(chatRequests.status, 'accepted')
+        )
+      );
 
     const unreadCounts: Record<string, number> = {};
 
-    for (const request of acceptedRequests) {
-      const isFromMe = request.from.toString() === authenticatedUserId;
-      const otherUserId = isFromMe ? request.to.toString() : request.from.toString();
-      
-      const otherUser = await User.findById(otherUserId);
-      if (!otherUser) {
-        console.log('[UnreadCounts] Other user not found:', otherUserId);
-        continue;
-      }
+    for (const request of accepted) {
+      const otherUserId =
+        request.fromUserId === authenticatedUserId
+          ? request.toUserId
+          : request.fromUserId;
+      const roomId = getRoomId(authenticatedUserId, otherUserId);
 
-      const roomId = [user.publicAddress.toLowerCase().trim(), otherUser.publicAddress.toLowerCase().trim()].sort().join('-');
+      const [{ value }] = await db
+        .select({ value: count() })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.roomId, roomId),
+            ne(messages.senderId, authenticatedUserId),
+            eq(messages.read, false)
+          )
+        );
 
-      const count = await Message.countDocuments({
-        roomId,
-        sender: { $ne: userObjectId },
-        read: false
-      });
-
-      if (count > 0) {
-        unreadCounts[otherUserId] = count;
-        console.log(`[UnreadCounts] Room ${roomId}: ${count} unread for user ${otherUser.publicAddress}`);
+      if (Number(value) > 0) {
+        unreadCounts[otherUserId] = Number(value);
       }
     }
 
@@ -442,40 +499,49 @@ export const getUnreadMessageCounts = async (req: AuthRequest, res: Response) =>
 
 export const updateContactName = async (req: AuthRequest, res: Response) => {
   try {
-    const { userId, contactUserId, customName } = req.body;
+    const { contactUserId, customName } = req.body as {
+      contactUserId?: string;
+      customName?: string;
+    };
     const authenticatedUserId = getAuthenticatedUserId(req);
 
     if (!authenticatedUserId) {
       return res.status(401).json({ error: 'Unauthorized: No active session' });
     }
-
     if (!contactUserId) {
       return res.status(400).json({ error: 'Contact user ID is required' });
     }
 
-    if (userId && String(userId) !== authenticatedUserId) {
-      return res.status(403).json({ error: 'Forbidden: userId does not match authenticated session' });
-    }
-
-    const chatReq = await ChatRequest.findOne({
-      $or: [
-        { from: authenticatedUserId, to: contactUserId },
-        { from: contactUserId, to: authenticatedUserId }
-      ],
-      status: 'accepted'
+    const db = getDb();
+    const chatReq = await db.query.chatRequests.findFirst({
+      where: and(
+        or(
+          and(
+            eq(chatRequests.fromUserId, authenticatedUserId),
+            eq(chatRequests.toUserId, contactUserId)
+          ),
+          and(
+            eq(chatRequests.fromUserId, contactUserId),
+            eq(chatRequests.toUserId, authenticatedUserId)
+          )
+        ),
+        eq(chatRequests.status, 'accepted')
+      ),
     });
 
     if (!chatReq) {
       return res.status(404).json({ error: 'Connection not found' });
     }
 
-    if (chatReq.from.toString() === authenticatedUserId) {
-      chatReq.fromCustomName = customName;
-    } else {
-      chatReq.toCustomName = customName;
-    }
+    const patch =
+      chatReq.fromUserId === authenticatedUserId
+        ? { fromCustomName: customName }
+        : { toCustomName: customName };
 
-    await chatReq.save();
+    await db
+      .update(chatRequests)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(chatRequests.id, chatReq.id));
 
     return res.status(200).json({ message: 'Contact name updated successfully', customName });
   } catch (error) {
@@ -486,37 +552,41 @@ export const updateContactName = async (req: AuthRequest, res: Response) => {
 
 export const disconnectChat = async (req: AuthRequest, res: Response) => {
   try {
-    const { userId, contactUserId } = req.body;
+    const { contactUserId } = req.body as { contactUserId?: string };
     const authenticatedUserId = getAuthenticatedUserId(req);
 
     if (!authenticatedUserId) {
       return res.status(401).json({ error: 'Unauthorized: No active session' });
     }
-
     if (!contactUserId) {
       return res.status(400).json({ error: 'Contact user ID is required' });
     }
 
-    if (userId && String(userId) !== authenticatedUserId) {
-      return res.status(403).json({ error: 'Forbidden: userId does not match authenticated session' });
-    }
-
-    const chatReq = await ChatRequest.findOne({
-      $or: [
-        { from: authenticatedUserId, to: contactUserId },
-        { from: contactUserId, to: authenticatedUserId }
-      ]
+    const db = getDb();
+    const chatReq = await db.query.chatRequests.findFirst({
+      where: or(
+        and(
+          eq(chatRequests.fromUserId, authenticatedUserId),
+          eq(chatRequests.toUserId, contactUserId)
+        ),
+        and(
+          eq(chatRequests.fromUserId, contactUserId),
+          eq(chatRequests.toUserId, authenticatedUserId)
+        )
+      ),
     });
 
     if (!chatReq) {
       return res.status(404).json({ error: 'Connection not found' });
     }
 
-    // Add to hiddenBy if not already there
-    if (!chatReq.hiddenBy.map(id => id.toString()).includes(authenticatedUserId)) {
-      chatReq.hiddenBy.push(authenticatedUserId as any);
-      await chatReq.save();
-    }
+    const hiddenBy = new Set(chatReq.hiddenBy ?? []);
+    hiddenBy.add(authenticatedUserId);
+
+    await db
+      .update(chatRequests)
+      .set({ hiddenBy: Array.from(hiddenBy), updatedAt: new Date() })
+      .where(eq(chatRequests.id, chatReq.id));
 
     return res.status(200).json({ message: 'Disconnected successfully' });
   } catch (error) {
@@ -525,8 +595,107 @@ export const disconnectChat = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// This will be called from index.ts where `onlineSocketsByUserId` is accessible
-// For the REST endpoint, we'll export a function that checks online status
+export const createInvite = async (req: AuthRequest, res: Response) => {
+  try {
+    const authenticatedUserId = getAuthenticatedUserId(req);
+    if (!authenticatedUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const token = crypto.randomBytes(16).toString('hex');
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const db = getDb();
+
+    const [invite] = await db
+      .insert(invites)
+      .values({
+        token,
+        createdById: authenticatedUserId,
+        expiresAt,
+      })
+      .returning();
+
+    return res.status(201).json({ invite });
+  } catch (error) {
+    console.error('[createInvite]', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+export const acceptInvite = async (req: AuthRequest, res: Response) => {
+  try {
+    const authenticatedUserId = getAuthenticatedUserId(req);
+    const { token } = req.body as { token?: string };
+
+    if (!authenticatedUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    if (!token) {
+      return res.status(400).json({ error: 'token required' });
+    }
+
+    const db = getDb();
+    const invite = await db.query.invites.findFirst({
+      where: eq(invites.token, token),
+    });
+
+    if (!invite) {
+      return res.status(404).json({ error: 'Invite not found' });
+    }
+    if (invite.expiresAt && invite.expiresAt < new Date()) {
+      return res.status(410).json({ error: 'Invite expired' });
+    }
+    if (invite.createdById === authenticatedUserId) {
+      return res.status(400).json({ error: 'Cannot accept your own invite' });
+    }
+
+    // Upsert accepted chat request
+    const existing = await db.query.chatRequests.findFirst({
+      where: or(
+        and(
+          eq(chatRequests.fromUserId, invite.createdById),
+          eq(chatRequests.toUserId, authenticatedUserId)
+        ),
+        and(
+          eq(chatRequests.fromUserId, authenticatedUserId),
+          eq(chatRequests.toUserId, invite.createdById)
+        )
+      ),
+    });
+
+    let request = existing;
+    if (existing) {
+      const [updated] = await db
+        .update(chatRequests)
+        .set({ status: 'accepted', hiddenBy: [], updatedAt: new Date() })
+        .where(eq(chatRequests.id, existing.id))
+        .returning();
+      request = updated;
+    } else {
+      const [created] = await db
+        .insert(chatRequests)
+        .values({
+          fromUserId: invite.createdById,
+          toUserId: authenticatedUserId,
+          status: 'accepted',
+        })
+        .returning();
+      request = created;
+    }
+
+    await db
+      .update(invites)
+      .set({ acceptedById: authenticatedUserId })
+      .where(eq(invites.id, invite.id));
+
+    const roomId = getRoomId(invite.createdById, authenticatedUserId);
+    return res.status(200).json({ request, roomId, otherUserId: invite.createdById });
+  } catch (error) {
+    console.error('[acceptInvite]', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 let onlineSocketsByUserIdRef: Map<string, Set<string>>;
 
 export const setOnlineSocketsRef = (ref: Map<string, Set<string>>) => {

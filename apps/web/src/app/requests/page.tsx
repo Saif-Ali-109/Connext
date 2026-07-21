@@ -2,608 +2,415 @@
 
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  UserPlus, Loader2, Check, X, MessageSquare,
-  Search, Clock, Users, Send, Copy, ChevronRight,
-  AlertCircle, RefreshCw, Shield, Wallet
-} from 'lucide-react';
+import { Search, Check, X, Send } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 import Navigation from '../../components/Navigation';
-import { getEncryptedItem } from '../../lib/storage';
+import InteractiveBackground from '../../components/ui/InteractiveBackground';
+import { useSession } from 'next-auth/react';
+import { useBridge } from '../../components/ClientProviders';
+import { getRoomId } from '../../lib/roomId';
+import { getApiBaseUrl } from '../../lib/api';
+import {
+  AnimatedButton,
+  IconField,
+  PageShell,
+  Spinner,
+  listContainer,
+  listItem,
+} from '../../components/ui/motion';
 
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4001';
-const theme = {
-  bgPrimary: 'var(--bg-primary)',
-  bgSecondary: 'var(--bg-secondary)',
-  bgTertiary: 'var(--bg-tertiary)',
-  textPrimary: 'var(--text-primary)',
-  textSecondary: 'var(--text-secondary)',
-  textMuted: 'var(--text-muted)',
-  border: 'var(--border-color)',
-  accent: 'var(--accent-color)',
-  accentBgSubtle: 'color-mix(in srgb, var(--accent-color) 8%, transparent)',
-  accentBgSoft: 'color-mix(in srgb, var(--accent-color) 15%, transparent)',
-  accentBgMedium: 'color-mix(in srgb, var(--accent-color) 20%, transparent)',
-  accentBgStrong: 'color-mix(in srgb, var(--accent-color) 30%, transparent)',
-  accentBorder: 'color-mix(in srgb, var(--accent-color) 28%, transparent)',
-  accentBorderStrong: 'color-mix(in srgb, var(--accent-color) 44%, transparent)',
-};
+const SERVER_URL = getApiBaseUrl();
 
-interface User {
-  _id: string;
-  publicAddress: string;
-  username?: string;
-  displayName?: string;
+type Tab = 'incoming' | 'outgoing' | 'search';
+
+interface PublicUser {
+  id: string;
+  username?: string | null;
+  displayName?: string | null;
+  email?: string | null;
 }
 
-interface Contact {
-  _id: string;
-  from: User;
-  to: User;
-  fromWallet: string;
-  toWallet: string;
-  status: 'pending' | 'accepted' | 'rejected';
-  createdAt?: string;
-}
-
-type Tab = 'incoming' | 'outgoing' | 'contacts';
-
-function shortenAddress(addr: string) {
-  if (!addr) return '';
-  return addr.slice(0, 6) + '...' + addr.slice(-4);
-}
-
-function getRoomIdFromContact(contact: Contact, currentUserId: string | null) {
-  return [contact.fromWallet.toLowerCase().trim(), contact.toWallet.toLowerCase().trim()].sort().join('-');
-}
-
-function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text);
-}
-
-function TimeAgo({ date }: { date?: string }) {
-  if (!date) return null;
-  const diff = Date.now() - new Date(date).getTime();
-  const mins = Math.floor(diff / 60000);
-  const hours = Math.floor(mins / 60);
-  const days = Math.floor(hours / 24);
-  const label = days > 0 ? `${days}d ago` : hours > 0 ? `${hours}h ago` : mins > 0 ? `${mins}m ago` : 'just now';
-  return <span className="text-xs" style={{ color: theme.textMuted }}>{label}</span>;
-}
-
-function Avatar({ address, size = 40 }: { address: string; size?: number }) {
-  const colors = ['#00ff87', '#00e5ff', '#ff6b6b', '#ffd700', '#a78bfa', '#fb923c'];
-  const color = colors[parseInt(address?.slice(2, 4) || '0', 16) % colors.length];
-  const letter = address ? address.slice(2, 3).toUpperCase() : '?';
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%',
-      background: `${color}22`,
-      border: `2px solid ${color}44`,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: size * 0.4, fontWeight: 700, color, flexShrink: 0,
-      fontFamily: 'monospace'
-    }}>
-      {letter}
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { color: string; bg: string; label: string }> = {
-    pending: { color: '#ffd700', bg: '#ffd70015', label: 'Pending' },
-    accepted: { color: '#00ff87', bg: '#00ff8715', label: 'Accepted' },
-    rejected: { color: '#ff6b6b', bg: '#ff6b6b15', label: 'Rejected' },
-  };
-  const s = map[status] || map.pending;
-  return (
-    <span style={{
-      fontSize: 11, fontWeight: 600, padding: '2px 8px',
-      borderRadius: 20, color: s.color, background: s.bg,
-      border: `1px solid ${s.color}33`, letterSpacing: '0.05em'
-    }}>
-      {s.label}
-    </span>
-  );
-}
-
-function EmptyState({ tab }: { tab: Tab }) {
-  const map = {
-    incoming: { icon: <UserPlus size={40} />, text: 'No incoming requests', sub: 'When someone sends you a chat request it will appear here' },
-    outgoing: { icon: <Send size={40} />, text: 'No outgoing requests', sub: 'Search for a public address, wallet address, or public key above to send a request' },
-    contacts: { icon: <Users size={40} />, text: 'No contacts yet', sub: 'Accept chat requests to add contacts' },
-  };
-  const { icon, text, sub } = map[tab];
-  return (
-    <div style={{ textAlign: 'center', padding: '60px 20px' }}>
-      <div style={{ color: theme.textMuted, marginBottom: 16 }}>{icon}</div>
-      <p style={{ color: theme.textSecondary, fontWeight: 600, marginBottom: 8 }}>{text}</p>
-      <p style={{ color: theme.textMuted, fontSize: 13 }}>{sub}</p>
-    </div>
-  );
+interface ChatReq {
+  id: string;
+  fromUserId: string;
+  toUserId: string;
+  status: string;
+  from?: PublicUser;
+  to?: PublicUser;
 }
 
 function RequestsContent() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<Tab>('incoming');
-  const [incoming, setIncoming] = useState<Contact[]>([]);
-  const [outgoing, setOutgoing] = useState<Contact[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const { status } = useSession();
+  const { ready, userId, profile, refreshProfile } = useBridge();
+  const [tab, setTab] = useState<Tab>('incoming');
+  const [incoming, setIncoming] = useState<ChatReq[]>([]);
+  const [outgoing, setOutgoing] = useState<ChatReq[]>([]);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<PublicUser[]>([]);
+  const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-
-  // Search state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResult, setSearchResult] = useState<User | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [sendingRequest, setSendingRequest] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const storedUserId = getEncryptedItem('auth_user_id');
-    const storedToken = getEncryptedItem('auth_token') || localStorage.getItem('auth_token');
-    if (!storedUserId) { router.push('/connect'); return; }
-    setUserId(storedUserId);
-    setToken(storedToken);
-  }, [router]);
+    if (status === 'unauthenticated') router.replace('/login');
+  }, [status, router]);
 
-  const getHeaders = () => ({
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  });
+  useEffect(() => {
+    if (profile?.username) setUsername(profile.username);
+  }, [profile?.username]);
 
-  const fetchRequests = async () => {
+  const load = async () => {
     if (!userId) return;
     setLoading(true);
-    setError(null);
     try {
-      const res = await fetch(`${SERVER_URL}/chat/requests`, {
-        credentials: 'include',
-        headers: getHeaders(),
-      });
+      const res = await fetch(`${SERVER_URL}/chat/requests`, { credentials: 'include' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to fetch requests');
+      if (!res.ok) throw new Error(data.error || 'Failed');
       setIncoming(data.incoming || []);
       setOutgoing(data.outgoing || []);
-      setContacts(data.contacts || []);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { if (userId) fetchRequests(); }, [userId]);
+  useEffect(() => {
+    if (ready && userId) void load();
+  }, [ready, userId]);
 
-  const showSuccess = (msg: string) => {
-    setSuccess(msg);
-    setTimeout(() => setSuccess(null), 3000);
-  };
-
-  const handleSearch = async () => {
-    const query = searchQuery.trim();
-    if (!query) return;
-    setSearching(true);
-    setSearchError(null);
-    setSearchResult(null);
-    try {
-      // Search by public address, wallet address, or public key
-      const res = await fetch(
-        `${SERVER_URL}/auth/user/${encodeURIComponent(query)}`,
-        { credentials: 'include', headers: getHeaders() }
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'User not found. Check the public address, wallet address, or public key.');
-      setSearchResult(data.user);
-    } catch (err: any) {
-      setSearchError(err.message || 'User not found. Check the public address, wallet address, or public key.');
-    } finally {
-      setSearching(false);
-    }
-  };
-
-  const handleSendRequest = async () => {
-    if (!searchResult) return;
-    setSendingRequest(true);
-    setSearchError(null);
-    try {
-      const res = await fetch(`${SERVER_URL}/chat/request`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          fromUserId: userId,
-          toPublicKey: searchResult.publicAddress || searchResult._id,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send request');
-      showSuccess('Chat request sent successfully!');
-      setSearchQuery('');
-      setSearchResult(null);
-      fetchRequests();
-      setActiveTab('outgoing');
-    } catch (err: any) {
-      setSearchError(err.message);
-    } finally {
-      setSendingRequest(false);
-    }
-  };
-
-  const handleRespond = async (requestId: string, status: 'accepted' | 'rejected') => {
-    setActionLoading(requestId + status);
+  const respond = async (requestId: string, nextStatus: 'accepted' | 'rejected') => {
+    setBusy(true);
     try {
       const res = await fetch(`${SERVER_URL}/chat/respond`, {
         method: 'POST',
         credentials: 'include',
-        headers: getHeaders(),
-        body: JSON.stringify({ requestId, status }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId, status: nextStatus }),
       });
-      if (!res.ok) throw new Error('Action failed');
-      showSuccess(status === 'accepted' ? 'Request accepted!' : 'Request rejected');
-      fetchRequests();
-    } catch (err: any) {
-      setError(err.message);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      await load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Failed');
     } finally {
-      setActionLoading(null);
+      setBusy(false);
     }
   };
 
-  const handleOpenChat = (contact: Contact) => {
-    router.push(`/chat/${getRoomIdFromContact(contact, userId)}`);
+  const search = async () => {
+    if (query.trim().length < 2) return;
+    setBusy(true);
+    try {
+      const res = await fetch(
+        `${SERVER_URL}/auth/user/${encodeURIComponent(query.trim())}`,
+        { credentials: 'include' }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Not found');
+      if (Array.isArray(data.users)) setResults(data.users);
+      else if (data.id) setResults([data]);
+      else setResults([]);
+    } catch (e) {
+      setResults([]);
+      setMessage(e instanceof Error ? e.message : 'Search failed');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleCopy = (text: string) => {
-    copyToClipboard(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const sendRequest = async (toUserId: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch(`${SERVER_URL}/chat/request`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toUserId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setMessage('Request sent');
+      await load();
+      setTab('outgoing');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const tabs: { id: Tab; label: string; count: number; icon: React.ReactNode }[] = [
-    { id: 'incoming', label: 'Incoming', count: incoming.filter(r => r.status === 'pending').length, icon: <UserPlus size={14} /> },
-    { id: 'outgoing', label: 'Sent', count: outgoing.length, icon: <Send size={14} /> },
-    { id: 'contacts', label: 'Contacts', count: contacts.length, icon: <Users size={14} /> },
-  ];
+  const saveUsername = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`${SERVER_URL}/auth/username`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      });
+      const data = await res.json();
+      if (res.status === 409) {
+        setMessage('That username is already taken. Try another.');
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setMessage(`Username set to @${data.user.username}`);
+      await refreshProfile();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setBusy(false);
+    }
+  };
 
-  const currentList = activeTab === 'incoming' ? incoming : activeTab === 'outgoing' ? outgoing : contacts;
+  const openChat = (req: ChatReq) => {
+    if (!userId) return;
+    const otherId = req.fromUserId === userId ? req.toUserId : req.fromUserId;
+    router.push(`/chat/${getRoomId(userId, otherId)}`);
+  };
+
+  if (status === 'loading' || loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Spinner />
+      </div>
+    );
+  }
 
   return (
-    <div style={{ maxWidth: 680, margin: '0 auto', padding: '24px 16px' }}>
+    <div className="min-h-screen">
+      <InteractiveBackground />
+      <Navigation />
+      <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+        <PageShell>
+          <h1 className="text-2xl font-semibold text-text-primary">People</h1>
+        </PageShell>
 
-      {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{
-              width: 36, height: 36, borderRadius: 10,
-              background: theme.accentBgSoft, border: `1px solid ${theme.accentBorder}`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center'
-            }}>
-              <Shield size={18} color={theme.accent} />
-            </div>
-            <div>
-              <h1 style={{ fontSize: 22, fontWeight: 800, color: theme.textPrimary, fontFamily: 'monospace', letterSpacing: '-0.02em' }}>
-                Chat Requests
-              </h1>
-              <p style={{ fontSize: 12, color: theme.textMuted }}>Manage your wallet connections</p>
-            </div>
-          </div>
-          <button
-            onClick={fetchRequests}
-            style={{
-              background: 'transparent', border: `1px solid ${theme.border}`,
-              borderRadius: 8, padding: '6px 10px', cursor: 'pointer',
-              color: theme.textMuted, display: 'flex', alignItems: 'center', gap: 6,
-              fontSize: 12, transition: 'all 0.2s'
-            }}
-            onMouseOver={e => (e.currentTarget.style.borderColor = theme.accentBorderStrong)}
-            onMouseOut={e => (e.currentTarget.style.borderColor = theme.border)}
-          >
-            <RefreshCw size={13} />
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* Search Box */}
-      <div style={{
-        background: theme.bgSecondary, border: `1px solid ${theme.border}`,
-        borderRadius: 16, padding: 20, marginBottom: 24,
-        boxShadow: '0 4px 24px rgba(0,0,0,0.12)'
-      }}>
-        <p style={{ fontSize: 12, color: theme.textMuted, marginBottom: 10, fontFamily: 'monospace', letterSpacing: '0.05em' }}>
-          FIND USER
-        </p>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <Search size={16} color={theme.textMuted} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-            <input
-              value={searchQuery}
-              onChange={e => { setSearchQuery(e.target.value); setSearchResult(null); setSearchError(null); }}
-              onKeyDown={e => e.key === 'Enter' && handleSearch()}
-              placeholder="Enter public address, wallet address, or public key..."
-              style={{
-                width: '100%', padding: '10px 12px 10px 36px',
-                background: theme.bgTertiary, border: `1px solid ${theme.border}`,
-                borderRadius: 10, color: theme.textPrimary, fontSize: 14,
-                outline: 'none', fontFamily: 'monospace',
-                boxSizing: 'border-box', transition: 'border-color 0.2s'
-              }}
-              onFocus={e => (e.target.style.borderColor = theme.accentBorderStrong)}
-              onBlur={e => (e.target.style.borderColor = theme.border)}
-            />
-          </div>
-          <button
-            onClick={handleSearch}
-            disabled={searching || !searchQuery.trim()}
-            style={{
-              padding: '10px 18px', borderRadius: 10, cursor: 'pointer',
-              background: searching ? theme.bgTertiary : theme.accentBgMedium,
-              border: `1px solid ${theme.accentBorderStrong}`,
-              color: theme.accent, fontWeight: 700, fontSize: 14,
-              display: 'flex', alignItems: 'center', gap: 6,
-              transition: 'all 0.2s', whiteSpace: 'nowrap',
-              opacity: !searchQuery.trim() ? 0.5 : 1
-            }}
-          >
-            {searching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-            {searching ? 'Searching...' : 'Search'}
-          </button>
-        </div>
-
-        {/* Search Error */}
-        {searchError && (
-          <div style={{
-            marginTop: 12, padding: '10px 14px', borderRadius: 10,
-            background: '#ff6b6b10', border: '1px solid #ff6b6b33',
-            display: 'flex', alignItems: 'center', gap: 8
-          }}>
-            <AlertCircle size={14} color="#ff6b6b" />
-            <p style={{ color: '#ff6b6b', fontSize: 13 }}>{searchError}</p>
-          </div>
-        )}
-
-        {/* Search Result */}
-        {searchResult && (
-          <div style={{
-            marginTop: 14, padding: 16, borderRadius: 12,
-            background: theme.accentBgSubtle, border: `1px solid ${theme.accentBorder}`,
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            gap: 12, flexWrap: 'wrap'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Avatar address={searchResult.publicAddress} size={44} />
-              <div>
-                <p style={{ color: theme.textPrimary, fontWeight: 700, marginBottom: 2 }}>
-                  {searchResult.displayName || searchResult.username || 'Anonymous User'}
-                </p>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Wallet size={11} color={theme.textMuted} />
-                  <span style={{ fontSize: 12, color: theme.textMuted, fontFamily: 'monospace' }}>
-                    {shortenAddress(searchResult.publicAddress)}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={handleSendRequest}
-              disabled={sendingRequest}
-              style={{
-                padding: '10px 20px', borderRadius: 10, cursor: 'pointer',
-                background: theme.accentBgMedium, border: `1px solid ${theme.accentBorderStrong}`,
-                color: theme.accent, fontWeight: 700, fontSize: 13,
-                display: 'flex', alignItems: 'center', gap: 6,
-                transition: 'all 0.2s'
-              }}
-              onMouseOver={e => (e.currentTarget.style.background = theme.accentBgStrong)}
-              onMouseOut={e => (e.currentTarget.style.background = theme.accentBgMedium)}
-            >
-              {sendingRequest ? <Loader2 size={14} /> : <UserPlus size={14} />}
-              {sendingRequest ? 'Sending...' : 'Send Request'}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Success Toast */}
-      {success && (
-        <div style={{
-          marginBottom: 16, padding: '12px 16px', borderRadius: 10,
-          background: theme.accentBgSoft, border: `1px solid ${theme.accentBorder}`,
-          display: 'flex', alignItems: 'center', gap: 8
-        }}>
-          <Check size={14} color={theme.accent} />
-          <p style={{ color: theme.accent, fontSize: 13, fontWeight: 600 }}>{success}</p>
-        </div>
-      )}
-
-      {/* Error Toast */}
-      {error && (
-        <div style={{
-          marginBottom: 16, padding: '12px 16px', borderRadius: 10,
-          background: '#ff6b6b10', border: '1px solid #ff6b6b33',
-          display: 'flex', alignItems: 'center', gap: 8
-        }}>
-          <AlertCircle size={14} color="#ff6b6b" />
-          <p style={{ color: '#ff6b6b', fontSize: 13 }}>{error}</p>
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div style={{
-        display: 'flex', gap: 4, marginBottom: 20,
-        background: theme.bgSecondary, border: `1px solid ${theme.border}`,
-        borderRadius: 12, padding: 4
-      }}>
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            style={{
-              flex: 1, padding: '8px 12px', borderRadius: 9,
-              border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-              transition: 'all 0.2s',
-              background: activeTab === tab.id ? theme.accentBgSoft : 'transparent',
-              color: activeTab === tab.id ? theme.accent : theme.textMuted,
-              borderBottom: activeTab === tab.id ? `1px solid ${theme.accentBorder}` : '1px solid transparent',
-            }}
-          >
-            {tab.icon}
-            {tab.label}
-            {tab.count > 0 && (
-              <span style={{
-                fontSize: 10, fontWeight: 800, padding: '1px 6px',
-                borderRadius: 20, minWidth: 18, textAlign: 'center',
-                background: activeTab === tab.id ? theme.accentBgStrong : theme.bgTertiary,
-                color: activeTab === tab.id ? theme.accent : theme.textMuted,
-              }}>
-                {tab.count}
-              </span>
+        <div className="rounded-xl border border-border p-4 space-y-3 bg-background-primary/60 backdrop-blur-md">
+          <p className="text-sm text-text-secondary">
+            {profile?.username ? (
+              <>
+                Your username is <span className="font-medium text-text-primary">@{profile.username}</span>. Change it below.
+              </>
+            ) : (
+              'Set a username so others can find you'
             )}
-          </button>
-        ))}
-      </div>
-
-      {/* List */}
-      {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 60, gap: 10 }}>
-          <Loader2 size={20} color={theme.accent} style={{ animation: 'spin 1s linear infinite' }} />
-          <span style={{ color: theme.textMuted, fontSize: 14 }}>Loading...</span>
+          </p>
+          <div className="flex gap-2">
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="your_username"
+              className="flex-1 rounded-lg border border-border bg-background-secondary px-3 py-2 text-sm"
+            />
+            <AnimatedButton
+              onClick={saveUsername}
+              disabled={busy || username.trim().toLowerCase() === (profile?.username ?? '') || username.length < 3}
+              className="px-4 py-2 text-sm"
+            >
+              {profile?.username ? 'Update' : 'Save'}
+            </AnimatedButton>
+          </div>
         </div>
-      ) : currentList.length === 0 ? (
-        <EmptyState tab={activeTab} />
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {currentList.map(req => {
-            const isFromMe = req.from._id === userId || req.fromWallet === userId;
-            const otherUser = isFromMe ? req.to : req.from;
-            const isActionLoading = (s: string) => actionLoading === req._id + s;
 
-            return (
-              <div
-                key={req._id}
-                style={{
-                  background: theme.bgSecondary, border: `1px solid ${theme.border}`,
-                  borderRadius: 14, padding: 16, transition: 'border-color 0.2s',
-                }}
-                onMouseOver={e => (e.currentTarget.style.borderColor = theme.accentBorder)}
-                onMouseOut={e => (e.currentTarget.style.borderColor = theme.border)}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <Avatar address={otherUser?.publicAddress || ''} size={46} />
+        <AnimatePresence>
+          {message && (
+            <motion.p
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              className="text-sm text-accent"
+            >
+              {message}
+            </motion.p>
+          )}
+        </AnimatePresence>
 
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
-                      <span style={{ color: theme.textPrimary, fontWeight: 700, fontSize: 15 }}>
-                        {otherUser?.displayName || otherUser?.username || 'Anonymous'}
-                      </span>
-                      <StatusBadge status={req.status} />
-                    </div>
+        <div className="flex gap-1 border-b border-border">
+          {(['incoming', 'outgoing', 'search'] as Tab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`relative px-3 py-2 text-sm capitalize transition-colors ${
+                tab === t ? 'text-accent' : 'text-text-secondary hover:text-accent'
+              }`}
+            >
+              {t}
+              {tab === t && (
+                <motion.span
+                  layoutId="tab-underline"
+                  className="absolute inset-x-0 -bottom-px h-0.5 bg-accent"
+                  transition={{ type: 'spring', stiffness: 400, damping: 32 }}
+                />
+              )}
+            </button>
+          ))}
+        </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <Wallet size={11} color={theme.textMuted} />
-                      <span style={{ fontSize: 12, color: theme.textMuted, fontFamily: 'monospace' }}>
-                        {shortenAddress(otherUser?.publicAddress || '')}
-                      </span>
-                      <button
-                        onClick={() => handleCopy(otherUser?.publicAddress || '')}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: theme.textMuted }}
-                        title="Copy address"
-                      >
-                        <Copy size={11} />
-                      </button>
-                      <TimeAgo date={req.createdAt} />
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    {activeTab === 'incoming' && req.status === 'pending' && (
-                      <>
-                        <button
-                          onClick={() => handleRespond(req._id, 'accepted')}
-                          disabled={!!actionLoading}
-                          style={{
-                            padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
-                            background: theme.accentBgSoft, border: `1px solid ${theme.accentBorderStrong}`,
-                            color: theme.accent, fontWeight: 700, fontSize: 13,
-                            display: 'flex', alignItems: 'center', gap: 5,
-                            transition: 'all 0.2s', opacity: actionLoading ? 0.6 : 1
-                          }}
-                        >
-                          {isActionLoading('accepted') ? <Loader2 size={13} /> : <Check size={13} />}
-                          Accept
-                        </button>
-                        <button
-                          onClick={() => handleRespond(req._id, 'rejected')}
-                          disabled={!!actionLoading}
-                          style={{
-                            padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
-                            background: '#ff6b6b10', border: '1px solid #ff6b6b33',
-                            color: '#ff6b6b', fontWeight: 700, fontSize: 13,
-                            display: 'flex', alignItems: 'center', gap: 5,
-                            transition: 'all 0.2s', opacity: actionLoading ? 0.6 : 1
-                          }}
-                        >
-                          {isActionLoading('rejected') ? <Loader2 size={13} /> : <X size={13} />}
-                          Reject
-                        </button>
-                      </>
-                    )}
-
-                    {activeTab === 'contacts' && (
-                      <button
-                        onClick={() => handleOpenChat(req)}
-                        style={{
-                          padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
-                          background: theme.accentBgMedium, border: `1px solid ${theme.accentBorder}`,
-                          color: theme.accent, fontWeight: 700, fontSize: 13,
-                          display: 'flex', alignItems: 'center', gap: 5,
-                          transition: 'all 0.2s'
-                        }}
-                        onMouseOver={e => (e.currentTarget.style.background = theme.accentBgStrong)}
-                        onMouseOut={e => (e.currentTarget.style.background = theme.accentBgMedium)}
-                      >
-                        <MessageSquare size={13} />
-                        Chat
-                        <ChevronRight size={13} />
-                      </button>
-                    )}
-
-                    {activeTab === 'outgoing' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Clock size={13} color={theme.accent} />
-                        <span style={{ fontSize: 12, color: theme.accent, fontWeight: 600 }}>Waiting</span>
-                      </div>
-                    )}
-                  </div>
+        <AnimatePresence mode="wait">
+          {tab === 'search' && (
+            <motion.div
+              key="search"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-4"
+            >
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <IconField
+                    icon={<Search className="w-4 h-4" />}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && search()}
+                    placeholder="Search username or email…"
+                  />
                 </div>
+                <AnimatedButton onClick={search} disabled={busy} className="px-4 py-2 text-sm">
+                  <Search className="w-4 h-4" />
+                  Search
+                </AnimatedButton>
               </div>
-            );
-          })}
-        </div>
-      )}
+              <motion.ul variants={listContainer} initial="hidden" animate="show" className="space-y-2">
+                <AnimatePresence>
+                  {results.map((u) => (
+                    <motion.li
+                      key={u.id}
+                      variants={listItem}
+                      layout
+                      exit="exit"
+                      className="flex items-center justify-between rounded-xl border border-border px-3 py-2 bg-background-primary/60 backdrop-blur-md"
+                    >
+                      <div>
+                        <div className="font-medium text-text-primary">{u.displayName || u.username || u.email}</div>
+                        <div className="text-xs text-text-muted">@{u.username || '—'}</div>
+                      </div>
+                      <motion.button
+                        whileHover={{ scale: busy || u.id === userId ? 1 : 1.05 }}
+                        whileTap={{ scale: busy || u.id === userId ? 1 : 0.95 }}
+                        onClick={() => sendRequest(u.id)}
+                        disabled={busy || u.id === userId}
+                        className="inline-flex items-center gap-1 rounded-lg bg-accent text-white px-3 py-1.5 text-sm disabled:opacity-50"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        Request
+                      </motion.button>
+                    </motion.li>
+                  ))}
+                </AnimatePresence>
+              </motion.ul>
+            </motion.div>
+          )}
+
+          {tab === 'incoming' && (
+            <motion.ul
+              key="incoming"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-2"
+            >
+              {incoming.length === 0 && (
+                <p className="text-sm text-text-secondary">No incoming requests</p>
+              )}
+              <AnimatePresence>
+                {incoming.map((r) => (
+                  <motion.li
+                    key={r.id}
+                    variants={listItem}
+                    initial="hidden"
+                    animate="show"
+                    exit="exit"
+                    layout
+                    className="flex items-center justify-between rounded-xl border border-border px-3 py-2 bg-background-primary/60 backdrop-blur-md"
+                  >
+                    <div>
+                      <div className="font-medium text-text-primary">
+                        {r.from?.displayName || r.from?.username || r.fromUserId}
+                      </div>
+                      <div className="text-xs text-text-muted">@{r.from?.username || 'user'}</div>
+                    </div>
+                    <div className="flex gap-2">
+                      <motion.button
+                        whileHover={{ scale: busy ? 1 : 1.08 }}
+                        whileTap={{ scale: busy ? 1 : 0.9 }}
+                        onClick={() => respond(r.id, 'accepted')}
+                        disabled={busy}
+                        className="p-2 rounded-lg bg-emerald-600 text-white disabled:opacity-50"
+                      >
+                        <Check className="w-4 h-4" />
+                      </motion.button>
+                      <motion.button
+                        whileHover={{ scale: busy ? 1 : 1.08 }}
+                        whileTap={{ scale: busy ? 1 : 0.9 }}
+                        onClick={() => respond(r.id, 'rejected')}
+                        disabled={busy}
+                        className="p-2 rounded-lg bg-red-600 text-white disabled:opacity-50"
+                      >
+                        <X className="w-4 h-4" />
+                      </motion.button>
+                    </div>
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+            </motion.ul>
+          )}
+
+          {tab === 'outgoing' && (
+            <motion.ul
+              key="outgoing"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="space-y-2"
+            >
+              {outgoing.length === 0 && (
+                <p className="text-sm text-text-secondary">No outgoing requests</p>
+              )}
+              <AnimatePresence>
+                {outgoing.map((r) => (
+                  <motion.li
+                    key={r.id}
+                    variants={listItem}
+                    initial="hidden"
+                    animate="show"
+                    exit="exit"
+                    layout
+                    className="flex items-center justify-between rounded-xl border border-border px-3 py-2 bg-background-primary/60 backdrop-blur-md"
+                  >
+                    <div>
+                      <div className="font-medium text-text-primary">
+                        {r.to?.displayName || r.to?.username || r.toUserId}
+                      </div>
+                      <div className="text-xs text-text-muted">pending</div>
+                    </div>
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+            </motion.ul>
+          )}
+        </AnimatePresence>
+      </main>
     </div>
   );
 }
 
 export default function RequestsPage() {
   return (
-    <main style={{ minHeight: '100vh', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-      <Navigation />
-      <Suspense fallback={
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 80, gap: 10 }}>
-          <Loader2 size={22} color={theme.accent} />
-          <span style={{ color: theme.textMuted }}>Loading requests...</span>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center">
+          <Spinner />
         </div>
-      }>
-        <RequestsContent />
-      </Suspense>
-    </main>
+      }
+    >
+      <RequestsContent />
+    </Suspense>
   );
 }

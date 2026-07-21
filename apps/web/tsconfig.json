@@ -1,5 +1,4 @@
 {
-  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "ignoreDeprecations": "5.0",
     "baseUrl": ".",

@@ -1,15 +1,26 @@
 import { Router } from 'express';
-import { getNonce, verifySignature, updatePublicKey, getPublicKeyByWallet, getUserByWallet, updateFcmToken, getSession } from '../controllers/auth.controller';
+import {
+  bridgeSession,
+  getSession,
+  logout,
+  updateUsername,
+  updatePublicKey,
+  updateFcmToken,
+  getUserByQuery,
+  updatePassword,
+} from '../controllers/auth.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
 
-router.post('/nonce', getNonce);
-router.post('/verify', verifySignature);
+router.post('/bridge', bridgeSession);
 router.get('/session', authenticateToken, getSession);
+router.post('/logout', authenticateToken, logout);
+router.post('/username', authenticateToken, updateUsername);
 router.post('/public-key', authenticateToken, updatePublicKey);
+router.post('/update-password', authenticateToken, updatePassword);
 router.post('/fcm-token', authenticateToken, updateFcmToken);
-router.get('/public-key/:wallet', getPublicKeyByWallet);
-router.get('/user/:wallet', getUserByWallet);
+router.get('/user/:query', authenticateToken, getUserByQuery);
+router.get('/search', authenticateToken, getUserByQuery);
 
 export default router;

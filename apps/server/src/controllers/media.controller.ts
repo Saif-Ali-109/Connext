@@ -1,9 +1,11 @@
 import { Response } from 'express';
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { and, eq, or } from 'drizzle-orm';
+import { chatRequests } from '@connext/db';
 import { getR2Client, R2_BUCKET, isR2Configured } from '../lib/r2';
 import { AuthRequest } from '../middleware/auth.middleware';
-import { ChatRequest } from '../models/ChatRequest';
+import { getDb } from '../lib/constants';
 
 const MAX_FILE_BYTES = Number(process.env.MAX_MEDIA_FILE_BYTES || 25 * 1024 * 1024);
 const DEFAULT_SIGNED_URL_SECONDS = Number(process.env.R2_SIGNED_URL_TTL_SECONDS || 300);
@@ -78,13 +80,21 @@ export const signDownloadUrl = async (req: AuthRequest, res: Response) => {
     const uploaderUserId = parts[1];
 
     if (uploaderUserId !== String(authUserId)) {
-      // Not the uploader. Check if they have an accepted connection.
-      const hasConnection = await ChatRequest.findOne({
-        $or: [
-          { from: authUserId, to: uploaderUserId },
-          { from: uploaderUserId, to: authUserId }
-        ],
-        status: 'accepted'
+      const db = getDb();
+      const hasConnection = await db.query.chatRequests.findFirst({
+        where: and(
+          or(
+            and(
+              eq(chatRequests.fromUserId, String(authUserId)),
+              eq(chatRequests.toUserId, uploaderUserId)
+            ),
+            and(
+              eq(chatRequests.fromUserId, uploaderUserId),
+              eq(chatRequests.toUserId, String(authUserId))
+            )
+          ),
+          eq(chatRequests.status, 'accepted')
+        ),
       });
 
       if (!hasConnection) {

@@ -76,7 +76,7 @@ export const validateKeyPair = async (publicKeyStr: string, privateKeyStr: strin
   if (!publicKeyStr || !privateKeyStr) return false;
 
   try {
-    const probe = `wallet-chat-key-check:${Date.now()}`;
+    const probe = `connext-key-check:${Date.now()}`;
     const encrypted = await encryptMessage(publicKeyStr, probe);
     const decrypted = await decryptMessage(privateKeyStr, encrypted);
     return decrypted === probe;

@@ -7,8 +7,8 @@ import { ThemeProvider } from '../components/ThemeProvider'
 // const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Wallet Chat',
-  description: 'Decentralized chat for wallets',
+  title: 'Connext',
+  description: 'Direct messaging for everyone',
 }
 
 export default function RootLayout({
