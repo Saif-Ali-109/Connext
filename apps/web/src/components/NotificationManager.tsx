@@ -29,7 +29,9 @@ export default function NotificationManager() {
     if (status !== 'authenticated' || !userId) return;
     if (pathname === '/login') return;
 
-    const socket = io(SERVER_URL, {
+    const isRelative = SERVER_URL.startsWith('/');
+    const socket = io(isRelative ? window.location.origin : SERVER_URL, {
+      path: isRelative ? `${SERVER_URL}/socket.io` : undefined,
       transports: ['polling', 'websocket'],
       withCredentials: true,
     });

@@ -54,7 +54,8 @@ app.use(
         return callback(null, true);
       }
       if (!origin) return callback(null, true);
-      if (ALLOWED_ORIGINS.includes(origin)) {
+      const isRailway = origin.endsWith('.railway.app') || origin.includes('.up.railway.app');
+      if (ALLOWED_ORIGINS.includes(origin) || isRailway) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
