@@ -3,7 +3,11 @@ const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ['lucide-react', '@connext/db'],
   async rewrites() {
-    const backendUrl = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4001';
+    // Trailing slash would produce `//path` destinations Express rejects with 404.
+    const backendUrl = (process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4001').replace(
+      /\/+$/,
+      ''
+    );
     return [
       {
         source: '/api/server/:path*',

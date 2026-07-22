@@ -31,7 +31,14 @@ const app = express();
 const server = http.createServer(app);
 
 if (process.env.NODE_ENV === 'production') {
-  app.use(helmet());
+  // cross-origin-resource-policy: same-origin blocks credentialed fetches from
+  // the split Railway frontend host; allow cross-origin reads for the API.
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+    })
+  );
 }
 app.use(cookieParser());
 app.use(compression());
@@ -47,20 +54,25 @@ const limiter = rateLimit({
 app.use('/auth', limiter);
 app.use('/chat', limiter);
 
+const corsOrigin = (
+  origin: string | undefined,
+  callback: (err: Error | null, allow?: boolean) => void
+) => {
+  if (process.env.NODE_ENV !== 'production') {
+    return callback(null, true);
+  }
+  if (!origin) return callback(null, true);
+  const isRailway = origin.endsWith('.railway.app') || origin.includes('.up.railway.app');
+  if (ALLOWED_ORIGINS.includes(origin) || isRailway) {
+    callback(null, true);
+  } else {
+    callback(new Error('Not allowed by CORS'));
+  }
+};
+
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (process.env.NODE_ENV !== 'production') {
-        return callback(null, true);
-      }
-      if (!origin) return callback(null, true);
-      const isRailway = origin.endsWith('.railway.app') || origin.includes('.up.railway.app');
-      if (ALLOWED_ORIGINS.includes(origin) || isRailway) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
+    origin: corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true,
   })
@@ -74,10 +86,8 @@ app.get('/health', (_req, res) => {
 
 const io = new Server(server, {
   cors: {
-    origin:
-      process.env.NODE_ENV === 'production'
-        ? ALLOWED_ORIGINS
-        : (origin, callback) => callback(null, true),
+    // Match HTTP CORS so Railway frontend hosts are accepted without env churn.
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
     credentials: true,
   },

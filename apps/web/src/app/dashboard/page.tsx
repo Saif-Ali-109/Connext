@@ -42,7 +42,7 @@ interface Contact {
 function DashboardContent() {
   const router = useRouter();
   const { status } = useSession();
-  const { ready, userId } = useBridge();
+  const { ready, settled, error: bridgeError, userId, retryBridge } = useBridge();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -87,8 +87,11 @@ function DashboardContent() {
     if (ready && userId) {
       void fetchContacts();
       void fetchUnreadCounts();
+    } else if (settled && !ready) {
+      // Bridge failed — stop spinning so the error state can render.
+      setLoading(false);
     }
-  }, [ready, userId, fetchContacts, fetchUnreadCounts]);
+  }, [ready, settled, userId, fetchContacts, fetchUnreadCounts]);
 
   // Refresh unread counts when returning to the tab (e.g. after reading a chat).
   useEffect(() => {
@@ -134,10 +137,41 @@ function DashboardContent() {
     return label.includes(searchQuery.toLowerCase());
   });
 
-  if (status === 'loading' || loading) {
+  if (status === 'loading' || (loading && !settled) || (loading && ready)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Spinner />
+      </div>
+    );
+  }
+
+  if (settled && !ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md w-full space-y-4 rounded-2xl border border-border bg-background-primary/80 p-6 text-center backdrop-blur-md">
+          <h1 className="text-lg font-semibold text-text-primary">Couldn&apos;t open dashboard</h1>
+          <p className="text-sm text-text-secondary">
+            {bridgeError || 'Failed to connect your session to the API.'}
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
+            <AnimatedButton
+              onClick={() => {
+                setLoading(true);
+                retryBridge();
+              }}
+              className="px-4 py-2 text-sm"
+            >
+              Try again
+            </AnimatedButton>
+            <button
+              type="button"
+              onClick={() => router.replace('/login')}
+              className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:border-accent hover:text-accent"
+            >
+              Back to login
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

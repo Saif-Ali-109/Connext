@@ -4,9 +4,14 @@ export function getAuthenticatedHeaders(headers?: HeadersInit): Headers {
   return new Headers(headers);
 }
 
+/** Normalize so callers can safely append `/path` without producing `//path`. */
+function stripTrailingSlash(url: string) {
+  return url.replace(/\/+$/, '');
+}
+
 export function getApiBaseUrl() {
-  const configured = process.env.NEXT_PUBLIC_SERVER_URL;
-  if (configured) return configured;
+  const configured = process.env.NEXT_PUBLIC_SERVER_URL?.trim();
+  if (configured) return stripTrailingSlash(configured);
 
   if (typeof window !== 'undefined') {
     const { protocol, hostname } = window.location;
