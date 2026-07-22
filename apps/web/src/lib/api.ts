@@ -9,7 +9,9 @@ export function getApiBaseUrl() {
   if (configured) return configured;
 
   if (typeof window !== 'undefined') {
-    return '/api/server';
+    const { protocol, hostname } = window.location;
+    const apiProtocol = protocol === 'https:' ? 'https:' : 'http:';
+    return `${apiProtocol}//${hostname}:4001`;
   }
 
   return 'http://localhost:4001';
