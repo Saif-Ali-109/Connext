@@ -16,6 +16,13 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# NEXT_PUBLIC_* vars are inlined into the client bundle at BUILD time, not read
+# at runtime. Railway passes matching service variables in as build args, so the
+# real backend URL gets baked in. Without this the client falls back to
+# `<frontend-host>:4001` and every API call hangs after login.
+ARG NEXT_PUBLIC_SERVER_URL
+ENV NEXT_PUBLIC_SERVER_URL=$NEXT_PUBLIC_SERVER_URL
+
 RUN npm run build --workspace=@connext/db
 RUN npm run build --workspace=connext-web
 
