@@ -1,3 +1,8 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "apps/web/Dockerfile"
+
+# The Docker image is a Next.js standalone build — there is no `next` binary to
+# run `next start`. Launch the bundled server directly (matches the Dockerfile CMD).
+[deploy]
+startCommand = "node apps/web/server.js"
