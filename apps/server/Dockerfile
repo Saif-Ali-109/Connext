@@ -34,4 +34,4 @@ COPY --from=builder /app/package.json ./package.json
 
 EXPOSE 5000
 
-CMD ["node", "apps/server/dist/index.js"]
+CMD ["npm", "run", "start", "--workspace=@connext/server"]
