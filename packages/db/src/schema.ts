@@ -107,6 +107,18 @@ export const chatRequests = pgTable(
   (t) => [uniqueIndex('chat_request_pair_idx').on(t.fromUserId, t.toUserId)]
 );
 
+/**
+ * Sliding-window rate limit for emailed sign-in codes. One row per email; we
+ * count requests inside the current window and block once the cap is hit until
+ * the window rolls over. Postgres-backed so it survives restarts and holds
+ * across multiple web instances.
+ */
+export const emailCodeRateLimits = pgTable('email_code_rate_limit', {
+  identifier: text('identifier').primaryKey(),
+  count: integer('count').default(0).notNull(),
+  windowStart: timestamp('windowStart', { mode: 'date' }).defaultNow().notNull(),
+});
+
 export const invites = pgTable('invite', {
   id: text('id')
     .primaryKey()
@@ -158,3 +170,4 @@ export type NewUser = typeof users.$inferInsert;
 export type Message = typeof messages.$inferSelect;
 export type ChatRequest = typeof chatRequests.$inferSelect;
 export type Invite = typeof invites.$inferSelect;
+export type EmailCodeRateLimit = typeof emailCodeRateLimits.$inferSelect;
