@@ -21,6 +21,7 @@ type Screen =
 type CodeGoal = 'signup' | 'recovery';
 
 const USERNAME_RE = /^[a-z0-9_]{3,24}$/;
+const EMAIL_RE = /^[a-zA-Z0-9]+@[a-zA-Z0-9]+\.[a-zA-Z]{2,}$/;
 
 const cardMotion = {
   initial: { opacity: 0, y: 12, filter: 'blur(4px)' },
