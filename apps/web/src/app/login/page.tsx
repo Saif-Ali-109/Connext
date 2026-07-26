@@ -22,14 +22,11 @@ type CodeGoal = 'signup' | 'recovery';
 
 const USERNAME_RE = /^[a-z0-9_]{3,24}$/;
 
-<<<<<<< HEAD
-=======
 // Only plain emails are allowed — no sub-addressing (`saif+1@gmail.com`) or other
 // atypical local parts. The local part is letters/digits with optional single
 // `.`, `_` or `-` separators (not leading/trailing/consecutive); `+` is rejected.
 const EMAIL_RE =
   /^[a-z0-9]+(?:[._-][a-z0-9]+)*@[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,}$/;
->>>>>>> f096c9e (fix(auth): prevent duplicate email signup and improve verification)
 
 const cardMotion = {
   initial: { opacity: 0, y: 12, filter: 'blur(4px)' },
