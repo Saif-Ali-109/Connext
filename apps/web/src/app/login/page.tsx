@@ -21,7 +21,7 @@ type Screen =
 type CodeGoal = 'signup' | 'recovery';
 
 const USERNAME_RE = /^[a-z0-9_]{3,24}$/;
-const EMAIL_RE = /^[a-zA-Z0-9]+@[a-zA-Z0-9]+\.[a-zA-Z]{2,}$/;
+
 
 const cardMotion = {
   initial: { opacity: 0, y: 12, filter: 'blur(4px)' },
@@ -163,38 +163,25 @@ export default function LoginPage() {
   // Email code: used both to start a new account (signup) and to recover access
   // when a password is forgotten. `codeGoal` decides where verification lands.
  async function onCodeRequest(e: FormEvent) {
-  e.preventDefault();
-
-  const normalizedEmail = email.trim().toLowerCase();
-
-  if (!EMAIL_RE.test(normalizedEmail)) {
-    setError('Email can only contain letters, numbers, @, and a valid domain.');
-    return;
-  }
-
-  setBusy(true);
-  setError(null);
-
-  try {
-    const result = await signIn('nodemailer', {
-      email: normalizedEmail,
-      redirect: false,
-    });
-
-    if (result?.error) {
-      setError('Could not send a code. Check the email address and try again.');
-      return;
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await signIn('nodemailer', {
+        email: email.trim(),
+        redirect: false,
+      });
+      if (result?.error) {
+        setError('Could not send a code. Check the email address and try again.');
+        return;
+      }
+      go('code-entry');
+    } catch {
+      setError('Could not send a code. Please try again.');
+    } finally {
+      setBusy(false);
     }
-
-    setEmail(normalizedEmail);
-    go('code-entry');
-  } catch {
-    setError('Could not send a code. Please try again.');
-  } finally {
-    setBusy(false);
   }
-}
-
   // Verifying the code signs in THIS device. New signups continue to onboarding
   // to pick a username + password; recovery users go to reset-password to set a
   // new password before landing on the dashboard.
