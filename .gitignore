@@ -61,3 +61,10 @@ apps/web/build.pid
 apps/web/certificates/
 
 progress.md
+
+#Extra .md Files
+ARCHITECTURE.md
+progress.md
+TODO.md
+SESSION_LOG.md
+CLAUDE.md
