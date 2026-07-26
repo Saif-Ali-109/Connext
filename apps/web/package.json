@@ -13,7 +13,7 @@
     "@auth/drizzle-adapter": "^1.10.0",
     "@connext/db": "*",
     "clsx": "^2.1.1",
-    "drizzle-orm": "^0.44.2",
+    "drizzle-orm": "^0.45.2",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.14.0",
     "next": "^15.1.4",
