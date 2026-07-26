@@ -1,3 +1,8 @@
+---
+title: Connext Technical Documentation
+description: This document provides a technical overview of the architecture, data models, routes, and features implemented in Connext.
+---
+
 # Connext Technical Documentation
 
 This document provides a technical overview of the architecture, data models, routes, and features implemented in Connext.

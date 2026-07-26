@@ -1,8 +1,19 @@
+---
+title: Progress
+description: Task tracker for Connext. Each entry has a name and a one-line description so any agent can tell what it is at a glance.
+---
+
 # Progress
 
 Task tracker for Connext. Each entry has a `name` and a one-line `description` so any agent can
 tell what it is at a glance. Add new tasks under `pending`; move them to `completed` when done.
 Keep this file current whenever a feature is finished or a task is created.
+
+Companion agent-memory files:
+- `MEMORY.md` — long-term context, decisions, and gotchas (read first on a new session).
+- `ARCHITECTURE.md` — how the code is laid out and how the core flows work.
+- `SESSION_LOG.md` — dated history of what was done each session.
+- `TODO.md` — detailed open work / fixes (mirrors the `pending:` section below).
 
 completed:
   - name: monorepo-setup

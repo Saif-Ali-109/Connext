@@ -1,3 +1,8 @@
+---
+title: Connext
+description: Connext is a real-time, one-to-one messaging application built with Next.js, Express, Socket.IO, and PostgreSQL (via Drizzle ORM).
+---
+
 # Connext
 
 Connext is a real-time, one-to-one messaging application built with Next.js, Express, Socket.IO, and PostgreSQL (via Drizzle ORM). It provides a seamless path from user registration, finding contacts, accepting requests, and instant real-time chat.

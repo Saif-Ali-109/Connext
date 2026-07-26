@@ -22,6 +22,12 @@ const CODE_WINDOW_MS = 10 * 60 * 1000; // rolling window length
 const CODE_MAX_PER_WINDOW = 10; // requests allowed per email per window
 const BREVO_SEND_TIMEOUT_MS = 10_000; // fail fast instead of hanging the login UI
 
+// Only plain emails are allowed — no sub-addressing (`saif+1@gmail.com`) or other
+// atypical local parts. Mirrors EMAIL_RE on the login screen; enforced here too
+// because the client check can be bypassed.
+const EMAIL_RE =
+  /^[a-z0-9]+(?:[._-][a-z0-9]+)*@[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,}$/;
+
 /** Split `"Connext <noreply@x.com>"` (or a bare address) into Brevo's sender shape. */
 function parseSender(from: string): { name?: string; email: string } {
   const match = from.match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
@@ -135,6 +141,11 @@ if (process.env.BREVO_API_KEY) {
       // Send the code itself, not a clickable link, so login completes on the
       // device that started it (type the code from any device that got the email).
       async sendVerificationRequest({ identifier, token }) {
+        // Reject sub-addressed / malformed emails that slipped past the client check.
+        if (!EMAIL_RE.test(identifier.toLowerCase())) {
+          throw new Error('Please use a plain email address (no "+" or special characters).');
+        }
+
         // Guard against abuse before spending a send. Skipped only if the DB is
         // unavailable (db is null), in which case auth is already degraded.
         if (db) await assertUnderRateLimit(db, identifier);
