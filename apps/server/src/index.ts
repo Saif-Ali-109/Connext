@@ -44,15 +44,25 @@ app.use(cookieParser());
 app.use(compression());
 app.use(morgan('combined'));
 
-const limiter = rateLimit({
+const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000,
-  message: 'Too many requests from this IP, please try again later.',
+  max: 200,
+  message: { error: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use('/auth', limiter);
-app.use('/chat', limiter);
+app.use('/auth', globalLimiter);
+app.use('/chat', globalLimiter);
+app.use('/media', globalLimiter);
+
+const notificationLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many notifications. Slow down.' },
+});
+app.use('/notifications', notificationLimiter);
 
 const corsOrigin = (
   origin: string | undefined,
@@ -139,6 +149,28 @@ const getRoomMembers = (roomId: string) =>
 const getOnlineSocketsForUser = (userId: string) =>
   Array.from(onlineSocketsByUserId.get(userId) ?? []);
 
+/** Emit to rooms of accepted contacts only, avoiding global broadcast. */
+async function emitToContacts(io: Server, userId: string, event: string, payload: object) {
+  try {
+    const db = getDb();
+    const accepted = await db
+      .select({ fromUserId: chatRequests.fromUserId, toUserId: chatRequests.toUserId })
+      .from(chatRequests)
+      .where(
+        and(
+          or(eq(chatRequests.fromUserId, userId), eq(chatRequests.toUserId, userId)),
+          eq(chatRequests.status, 'accepted')
+        )
+      );
+    for (const r of accepted) {
+      const contactId = r.fromUserId === userId ? r.toUserId : r.fromUserId;
+      io.to(`user:${contactId}`).emit(event, payload);
+    }
+  } catch {
+    // silently degrade
+  }
+}
+
 io.on('connection', (socket) => {
   const currentUser = socket.data.user as { id: string; email?: string };
   if (!currentUser?.id) {
@@ -152,7 +184,7 @@ io.on('connection', (socket) => {
   userSockets.add(socket.id);
   onlineSocketsByUserId.set(currentUserId, userSockets);
   socket.join(`user:${currentUserId}`);
-  io.emit('user_online', { userId: currentUserId });
+  void emitToContacts(io, currentUserId, 'user_online', { userId: currentUserId });
 
   socket.on(
     'join_room',
@@ -349,9 +381,7 @@ io.on('connection', (socket) => {
         .set({ deliveredAt: new Date() })
         .where(and(eq(messages.id, messageId), isNull(messages.deliveredAt)))
         .returning();
-      const senderId =
-        msg?.senderId ??
-        (await db.query.messages.findFirst({ where: eq(messages.id, messageId) }))?.senderId;
+      const senderId = msg?.senderId;
       if (senderId) {
         io.to(`user:${senderId}`)
           .to(`user:${currentUserId}`)
@@ -397,7 +427,7 @@ io.on('connection', (socket) => {
       ownedSockets.delete(socket.id);
       if (ownedSockets.size === 0) {
         onlineSocketsByUserId.delete(currentUserId);
-        io.emit('user_offline', { userId: currentUserId });
+        void emitToContacts(io, currentUserId, 'user_offline', { userId: currentUserId });
       }
     }
     messageTimestamps.delete(socket.id);

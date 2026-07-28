@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import { ArrowLeft, Check, CheckCheck, Loader2, Send } from 'lucide-react';
@@ -84,6 +84,9 @@ export default function ChatClient() {
   const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const readEmittedRef = useRef<Set<string>>(new Set());
+  const messageIdsRef = useRef(new Set<string>());
+  const lastProcessedCountRef = useRef(0);
+  const tempIdCounter = useRef(0);
 
   const otherUserId = userId ? otherUserIdFromRoom(roomId, userId) : null;
 
@@ -120,6 +123,7 @@ export default function ChatClient() {
           })
         );
       setMessages(rows);
+      messageIdsRef.current = new Set(rows.map((r: ChatMessage) => r.id));
     } catch (e) {
       console.error(e);
     } finally {
@@ -164,6 +168,16 @@ export default function ChatClient() {
       socket.emit('join_room', { roomId, otherIdentifier: otherUserId });
     });
 
+    const updateStatus = (messageId: string, newStatus: DeliveryState) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId && m.sender === 'me'
+            ? { ...m, status: bumpStatus(m.status, newStatus) }
+            : m
+        )
+      );
+    };
+
     socket.on('receive_message', (payload: {
       id: string;
       sender?: { id: string };
@@ -173,59 +187,36 @@ export default function ChatClient() {
       roomId?: string;
     }) => {
       if (payload.roomId && payload.roomId !== roomId) return;
-      const text = payload.content || payload.encryptedContent || '';
+      if (messageIdsRef.current.has(payload.id)) return;
       const mine = payload.sender?.id === userId;
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === payload.id)) return prev;
-        return [
-          ...prev,
-          {
-            id: payload.id,
-            key: payload.id,
-            sender: mine ? 'me' : 'other',
-            text,
-            createdAt: payload.createdAt || new Date().toISOString(),
-            status: mine ? 'sent' : undefined,
-          },
-        ];
-      });
-      // Incoming message from the peer: acknowledge receipt, and since this
-      // chat is open on screen, mark it read immediately.
-      if (!mine) {
-        socket.emit('message_delivered', { roomId, messageId: payload.id });
-        socket.emit('message_read', { roomId, messageId: payload.id });
-      }
+      // Skip socket echo for own messages — optimistic add + ack already handle it
+      if (mine) return;
+      messageIdsRef.current.add(payload.id);
+      const text = payload.content || payload.encryptedContent || '';
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: payload.id,
+          key: payload.id,
+          sender: 'other',
+          text,
+          createdAt: payload.createdAt || new Date().toISOString(),
+        },
+      ]);
+      socket.emit('message_delivered', { roomId, messageId: payload.id });
+      socket.emit('message_read', { roomId, messageId: payload.id });
     });
 
-    // Sender-side updates: the peer's device acknowledged/opened our message.
     socket.on('message_delivery_status', (data: { messageId: string; delivered: boolean }) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === data.messageId && m.sender === 'me'
-            ? { ...m, status: bumpStatus(m.status, data.delivered ? 'delivered' : 'sent') }
-            : m
-        )
-      );
+      updateStatus(data.messageId, data.delivered ? 'delivered' : 'sent');
     });
 
     socket.on('message_delivered_relay', (data: { messageId: string }) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === data.messageId && m.sender === 'me'
-            ? { ...m, status: bumpStatus(m.status, 'delivered') }
-            : m
-        )
-      );
+      updateStatus(data.messageId, 'delivered');
     });
 
     socket.on('message_read_relay', (data: { messageId: string }) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === data.messageId && m.sender === 'me'
-            ? { ...m, status: 'read' }
-            : m
-        )
-      );
+      updateStatus(data.messageId, 'read');
     });
 
     return () => {
@@ -234,23 +225,23 @@ export default function ChatClient() {
     };
   }, [ready, userId, otherUserId, roomId]);
 
-  // Opening the chat marks the peer's already-received messages as read.
-  // The load endpoint flips the DB flag; this notifies the sender live so
-  // their ticks turn blue without a reload.
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket || messages.length === 0) return;
-    for (const m of messages) {
+    for (let i = lastProcessedCountRef.current; i < messages.length; i++) {
+      const m = messages[i];
       if (m.sender === 'other' && !readEmittedRef.current.has(m.id)) {
         readEmittedRef.current.add(m.id);
         socket.emit('message_read', { roomId, messageId: m.id });
       }
     }
+    lastProcessedCountRef.current = messages.length;
   }, [messages, roomId]);
 
   useEffect(() => {
+    if (messages.length === 0) return;
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages.length]);
 
   const send = async () => {
     const text = draft.trim();
@@ -258,7 +249,7 @@ export default function ChatClient() {
     setSending(true);
     setDraft('');
 
-    const tempId = `local-${Date.now()}`;
+    const tempId = `local-${Date.now()}-${++tempIdCounter.current}`;
     setMessages((prev) => [
       ...prev,
       { id: tempId, key: tempId, sender: 'me', text, createdAt: new Date().toISOString(), status: 'sending' },
@@ -281,6 +272,7 @@ export default function ChatClient() {
                 return;
               }
               const nextStatus: DeliveryState = ack.delivered ? 'delivered' : 'sent';
+              if (ack.messageId) messageIdsRef.current.add(ack.messageId);
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === tempId
@@ -305,6 +297,7 @@ export default function ChatClient() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Send failed');
+        if (data.messageId) messageIdsRef.current.add(data.messageId);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === tempId ? { ...m, id: data.messageId ?? m.id, status: 'sent' } : m

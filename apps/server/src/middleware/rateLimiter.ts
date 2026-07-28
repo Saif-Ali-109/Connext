@@ -1,22 +1,86 @@
-import { Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
+import type { Request } from 'express';
 
-const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
+const minute = 60 * 1000;
 
-export const rateLimiter = (req: Request, res: Response, next: NextFunction) => {
-  const ip = req.ip || 'anonymous';
-  const now = Date.now();
-  const data = rateLimitMap.get(ip) || { count: 0, lastReset: now };
+const keyById = (req: Request) =>
+  (req as any).user?.id ?? req.ip ?? 'anonymous';
 
-  if (now - data.lastReset > 60000) {
-    data.count = 0;
-    data.lastReset = now;
-  }
+export const strictAuth = rateLimit({
+  windowMs: 1 * minute,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Try again later.' },
+});
 
-  if (data.count > 100) {
-    return res.status(429).send('Too many requests');
-  }
+export const passwordChange = rateLimit({
+  windowMs: 10 * minute,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyById,
+  message: { error: 'Too many password attempts. Try again later.' },
+});
 
-  data.count++;
-  rateLimitMap.set(ip, data);
-  next();
-};
+export const sendVerification = rateLimit({
+  windowMs: 10 * minute,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyById,
+  message: { error: 'Too many verification requests. Try again later.' },
+});
+
+export const verifyEmailLimiter = rateLimit({
+  windowMs: 10 * minute,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyById,
+  message: { error: 'Too many verification attempts. Try again later.' },
+});
+
+export const chatRequest = rateLimit({
+  windowMs: 1 * minute,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyById,
+  message: { error: 'Too many requests. Slow down.' },
+});
+
+export const sendMessage = rateLimit({
+  windowMs: 1 * minute,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyById,
+  message: { error: 'Too many messages. Slow down.' },
+});
+
+export const createInvite = rateLimit({
+  windowMs: 10 * minute,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyById,
+  message: { error: 'Too many invites. Try again later.' },
+});
+
+export const mediaUpload = rateLimit({
+  windowMs: 1 * minute,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyById,
+  message: { error: 'Too many uploads. Slow down.' },
+});
+
+export const standard = rateLimit({
+  windowMs: 1 * minute,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down.' },
+});

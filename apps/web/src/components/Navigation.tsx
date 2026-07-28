@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { MessageSquare, LayoutDashboard, Inbox, LogOut, Menu, X, Sun, Moon } from 'lucide-react';
+import { MessageSquare, LayoutDashboard, LogOut, Menu, X, Sun, Moon } from 'lucide-react';
 import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useTheme } from './ThemeProvider';
@@ -53,7 +53,6 @@ export default function Navigation() {
 
   const navItems = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { name: 'Requests', href: '/requests', icon: Inbox },
   ];
 
   return (

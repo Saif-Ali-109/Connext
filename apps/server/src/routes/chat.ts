@@ -14,20 +14,26 @@ import {
   acceptInvite,
 } from '../controllers/chat.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
+import {
+  chatRequest,
+  sendMessage as msgLimiter,
+  createInvite as inviteLimiter,
+  standard,
+} from '../middleware/rateLimiter';
 
 const router = Router();
 
-router.post('/request', authenticateToken, sendRequest);
-router.post('/respond', authenticateToken, respondToRequest);
+router.post('/request', authenticateToken, chatRequest, sendRequest);
+router.post('/respond', authenticateToken, chatRequest, respondToRequest);
 router.get('/requests', authenticateToken, getRequests);
 router.delete('/request/:requestId', authenticateToken, removeRequest);
 router.get('/messages/:roomId', authenticateToken, getMessages);
-router.post('/send-message', authenticateToken, sendMessage);
+router.post('/send-message', authenticateToken, msgLimiter, sendMessage);
 router.get('/unreadCounts', authenticateToken, getUnreadMessageCounts);
-router.put('/contact-name', authenticateToken, updateContactName);
+router.put('/contact-name', authenticateToken, standard, updateContactName);
 router.post('/disconnect', authenticateToken, disconnectChat);
 router.get('/online-status/:userId', authenticateToken, getOnlineStatus);
-router.post('/invite', authenticateToken, createInvite);
+router.post('/invite', authenticateToken, inviteLimiter, createInvite);
 router.post('/invite/accept', authenticateToken, acceptInvite);
 
 export default router;

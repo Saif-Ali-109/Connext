@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   pgTable,
   primaryKey,
@@ -48,16 +49,21 @@ export const accounts = pgTable(
   },
   (account) => [
     primaryKey({ columns: [account.provider, account.providerAccountId] }),
+    index('accounts_user_id_idx').on(account.userId),
   ]
 );
 
-export const sessions = pgTable('session', {
-  sessionToken: text('sessionToken').primaryKey(),
-  userId: text('userId')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  expires: timestamp('expires', { mode: 'date' }).notNull(),
-});
+export const sessions = pgTable(
+  'session',
+  {
+    sessionToken: text('sessionToken').primaryKey(),
+    userId: text('userId')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    expires: timestamp('expires', { mode: 'date' }).notNull(),
+  },
+  (t) => [index('sessions_user_id_idx').on(t.userId)]
+);
 
 export const verificationTokens = pgTable(
   'verificationToken',
@@ -69,21 +75,30 @@ export const verificationTokens = pgTable(
   (vt) => [primaryKey({ columns: [vt.identifier, vt.token] })]
 );
 
-export const messages = pgTable('message', {
-  id: text('id')
-    .primaryKey()
-    .$defaultFn(() => randomUUID()),
-  senderId: text('senderId')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  roomId: text('roomId').notNull(),
-  content: text('content'),
-  read: boolean('read').default(false).notNull(),
-  deliveredAt: timestamp('deliveredAt', { mode: 'date' }),
-  timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
-});
+export const messages = pgTable(
+  'message',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    senderId: text('senderId')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    roomId: text('roomId').notNull(),
+    content: text('content'),
+    read: boolean('read').default(false).notNull(),
+    deliveredAt: timestamp('deliveredAt', { mode: 'date' }),
+    timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
+    createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('messages_room_id_idx').on(t.roomId),
+    index('messages_room_id_timestamp_idx').on(t.roomId, t.timestamp),
+    index('messages_sender_id_idx').on(t.senderId),
+    index('messages_read_room_id_idx').on(t.roomId, t.read),
+  ]
+);
 
 export const chatRequests = pgTable(
   'chat_request',
@@ -104,7 +119,10 @@ export const chatRequests = pgTable(
     createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
   },
-  (t) => [uniqueIndex('chat_request_pair_idx').on(t.fromUserId, t.toUserId)]
+  (t) => [
+    uniqueIndex('chat_request_pair_idx').on(t.fromUserId, t.toUserId),
+    index('chat_requests_status_idx').on(t.status),
+  ]
 );
 
 /**
@@ -113,6 +131,27 @@ export const chatRequests = pgTable(
  * the window rolls over. Postgres-backed so it survives restarts and holds
  * across multiple web instances.
  */
+export const verificationCodes = pgTable(
+  'verification_code',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    userId: text('userId')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    code: text('code').notNull(),
+    type: text('type').notNull().$type<'email_verification' | 'email_change'>(),
+    expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+    usedAt: timestamp('usedAt', { mode: 'date' }),
+    createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('verification_codes_user_id_idx').on(t.userId),
+  ]
+);
+
 export const emailCodeRateLimits = pgTable('email_code_rate_limit', {
   identifier: text('identifier').primaryKey(),
   count: integer('count').default(0).notNull(),
@@ -170,4 +209,5 @@ export type NewUser = typeof users.$inferInsert;
 export type Message = typeof messages.$inferSelect;
 export type ChatRequest = typeof chatRequests.$inferSelect;
 export type Invite = typeof invites.$inferSelect;
+export type VerificationCode = typeof verificationCodes.$inferSelect;
 export type EmailCodeRateLimit = typeof emailCodeRateLimits.$inferSelect;

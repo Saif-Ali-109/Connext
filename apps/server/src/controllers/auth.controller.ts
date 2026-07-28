@@ -1,10 +1,12 @@
 import { Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { eq, or, ilike } from 'drizzle-orm';
-import { users, hashPassword } from '@connext/db';
+import { eq, or, ilike, and, gte, isNull, sql } from 'drizzle-orm';
+import { users, verificationCodes, hashPassword } from '@connext/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { getDb, JWT_SECRET, JWT_EXPIRES_DAYS } from '../lib/constants';
 import { verifyBridgePayload, type BridgePayload } from '../lib/bridge';
+import { sendEmail } from '../lib/email';
+import crypto from 'crypto';
 
 function publicUser(row: typeof users.$inferSelect) {
   return {
@@ -16,6 +18,7 @@ function publicUser(row: typeof users.$inferSelect) {
     avatarUrl: row.avatarUrl || row.image,
     lastSeenAt: row.lastSeenAt,
     hasPassword: Boolean(row.passwordHash),
+    emailVerified: row.emailVerified ?? null,
   };
 }
 
@@ -219,6 +222,113 @@ export const updatePassword = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error('[updatePassword]', error);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+const VERIFICATION_CODE_WINDOW_MS = 10 * 60 * 1000;
+const VERIFICATION_CODE_MAX_PER_WINDOW = 3;
+
+export const sendVerificationEmail = async (req: AuthRequest, res: Response) => {
+  try {
+    const { email } = req.body as { email?: string };
+    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+    if (
+      !email ||
+      !/^[a-z0-9]+(?:[._-][a-z0-9]+)*@[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,}$/i.test(email)
+    ) {
+      return res.status(400).json({ error: 'Invalid email address' });
+    }
+
+    const db = getDb();
+    const tenMinAgo = new Date(Date.now() - VERIFICATION_CODE_WINDOW_MS);
+    const recent = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(verificationCodes)
+      .where(
+        and(
+          eq(verificationCodes.userId, req.user.id),
+          gte(verificationCodes.createdAt, tenMinAgo)
+        )
+      );
+
+    const count = Number(recent[0]?.count ?? 0);
+    if (count >= VERIFICATION_CODE_MAX_PER_WINDOW) {
+      return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+    }
+
+    const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await db.insert(verificationCodes).values({
+      userId: req.user.id,
+      email,
+      code,
+      type: 'email_verification',
+      expiresAt,
+    });
+
+    await sendEmail({
+      to: email,
+      subject: 'Verify your email on Connext',
+      textContent: `Your verification code is ${code}\n\nEnter it in the app to verify your email. It expires in 10 minutes.\n\nIf you didn't request this, you can ignore this email.`,
+      htmlContent: `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:420px;margin:0 auto;padding:24px;color:#18181b">
+        <h1 style="font-size:18px;margin:0 0 16px">Verify your email</h1>
+        <p style="font-size:14px;color:#52525b;margin:0 0 20px">Enter this code in the app to verify your email:</p>
+        <div style="font-size:32px;font-weight:700;letter-spacing:8px;text-align:center;padding:16px;background:#f4f4f5;border-radius:12px">${code}</div>
+        <p style="font-size:13px;color:#71717a;margin:20px 0 0">This code expires in 10 minutes.</p>
+      </div>`,
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error('[sendVerificationEmail]', error);
+    return res.status(500).json({ error: 'Failed to send verification email' });
+  }
+};
+
+export const verifyEmail = async (req: AuthRequest, res: Response) => {
+  try {
+    const { email, code } = req.body as { email?: string; code?: string };
+    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+    if (!email || !code) {
+      return res.status(400).json({ error: 'Email and code are required' });
+    }
+
+    const db = getDb();
+    const existing = await db.query.verificationCodes.findFirst({
+      where: and(
+        eq(verificationCodes.userId, req.user.id),
+        eq(verificationCodes.email, email),
+        eq(verificationCodes.code, code),
+        eq(verificationCodes.type, 'email_verification'),
+        isNull(verificationCodes.usedAt),
+        gte(verificationCodes.expiresAt, new Date())
+      ),
+    });
+
+    if (!existing) {
+      return res.status(400).json({ error: 'Invalid or expired code' });
+    }
+
+    await db
+      .update(verificationCodes)
+      .set({ usedAt: new Date() })
+      .where(eq(verificationCodes.id, existing.id));
+
+    const [updated] = await db
+      .update(users)
+      .set({
+        email,
+        emailVerified: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, req.user.id))
+      .returning();
+
+    return res.status(200).json({ user: publicUser(updated) });
+  } catch (error) {
+    console.error('[verifyEmail]', error);
+    return res.status(500).json({ error: 'Failed to verify email' });
   }
 };
 

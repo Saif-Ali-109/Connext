@@ -57,7 +57,7 @@ export default function NotificationManager() {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [status, userId, pathname]);
+  }, [status, userId]);
 
   return null;
 }

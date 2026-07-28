@@ -18,6 +18,9 @@ export const DATABASE_URL = readEnv(
   { requiredInProduction: true }
 );
 export const PORT = readNumberEnv('PORT', 4001);
+export const BREVO_API_KEY = readEnv('BREVO_API_KEY', '');
+export const EMAIL_FROM = readEnv('EMAIL_FROM', 'Connext <noreply@connext.local>');
+
 export const ALLOWED_ORIGINS = readEnv(
   'ALLOWED_ORIGINS',
   'http://localhost:3000'

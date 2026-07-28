@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { and, eq, or, ne, count, desc } from 'drizzle-orm';
+import { and, eq, or, ne, count, desc, inArray, sql } from 'drizzle-orm';
 import {
   users,
   messages,
@@ -192,17 +192,14 @@ export const getRequests = async (req: AuthRequest, res: Response) => {
       )
     );
 
-    const userIds = new Set<string>();
-    for (const r of all) {
-      userIds.add(r.fromUserId);
-      userIds.add(r.toUserId);
-    }
+    const userIds = [...new Set(all.flatMap((r) => [r.fromUserId, r.toUserId]))];
 
-    const userMap = new Map<string, ReturnType<typeof publicUser>>();
-    for (const id of userIds) {
-      const u = await db.query.users.findFirst({ where: eq(users.id, id) });
-      if (u) userMap.set(id, publicUser(u));
-    }
+    const userRows = userIds.length > 0
+      ? await db.select().from(users).where(inArray(users.id, userIds))
+      : [];
+    const userMap = new Map<string, ReturnType<typeof publicUser>>(
+      userRows.map((u) => [u.id, publicUser(u)])
+    );
 
     const hydrate = (r: typeof chatRequests.$inferSelect) => ({
       ...r,
@@ -288,18 +285,23 @@ export const getMessages = async (req: AuthRequest, res: Response) => {
     const limitNum = parseInt(req.query.limit as string) || 20;
     const offset = (pageNum - 1) * limitNum;
 
-    const [{ value: totalCount }] = await db
-      .select({ value: count() })
-      .from(messages)
-      .where(eq(messages.roomId, roomId));
-
     const rows = await db
-      .select()
+      .select({
+        id: messages.id,
+        senderId: messages.senderId,
+        content: messages.content,
+        read: messages.read,
+        deliveredAt: messages.deliveredAt,
+        timestamp: messages.timestamp,
+        totalCount: sql<number>`count(*) over()`,
+      })
       .from(messages)
       .where(eq(messages.roomId, roomId))
       .orderBy(desc(messages.timestamp))
       .limit(limitNum)
       .offset(offset);
+
+    const totalCount = rows.length > 0 ? Number(rows[0].totalCount) : 0;
 
     const formattedMessages = rows.map((msg) => ({
       id: msg.id,
@@ -461,29 +463,38 @@ export const getUnreadMessageCounts = async (req: AuthRequest, res: Response) =>
         )
       );
 
+    if (accepted.length === 0) {
+      return res.status(200).json({});
+    }
+
+    const roomConditions = accepted.map((r) => {
+      const otherId =
+        r.fromUserId === authenticatedUserId ? r.toUserId : r.fromUserId;
+      const roomId = getRoomId(authenticatedUserId, otherId);
+      return { otherId, roomId };
+    });
+
+    const roomIds = roomConditions.map((rc) => rc.roomId);
+    const rows = await db
+      .select({
+        roomId: messages.roomId,
+        value: count(),
+      })
+      .from(messages)
+      .where(
+        and(
+          inArray(messages.roomId, roomIds),
+          ne(messages.senderId, authenticatedUserId),
+          eq(messages.read, false)
+        )
+      )
+      .groupBy(messages.roomId);
+
+    const roomCountMap = new Map(rows.map((r) => [r.roomId, Number(r.value)]));
     const unreadCounts: Record<string, number> = {};
-
-    for (const request of accepted) {
-      const otherUserId =
-        request.fromUserId === authenticatedUserId
-          ? request.toUserId
-          : request.fromUserId;
-      const roomId = getRoomId(authenticatedUserId, otherUserId);
-
-      const [{ value }] = await db
-        .select({ value: count() })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.roomId, roomId),
-            ne(messages.senderId, authenticatedUserId),
-            eq(messages.read, false)
-          )
-        );
-
-      if (Number(value) > 0) {
-        unreadCounts[otherUserId] = Number(value);
-      }
+    for (const rc of roomConditions) {
+      const count = roomCountMap.get(rc.roomId) ?? 0;
+      if (count > 0) unreadCounts[rc.otherId] = count;
     }
 
     return res.status(200).json(unreadCounts);

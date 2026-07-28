@@ -19,6 +19,7 @@ export interface ServerProfile {
   avatarUrl?: string | null;
   publicKey?: string | null;
   hasPassword?: boolean;
+  emailVerified?: string | null;
 }
 
 interface BridgeContextValue {

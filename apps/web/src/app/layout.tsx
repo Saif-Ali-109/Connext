@@ -9,6 +9,10 @@ import { ThemeProvider } from '../components/ThemeProvider'
 export const metadata: Metadata = {
   title: 'Connext',
   description: 'Direct messaging for everyone',
+  icons: {
+    icon: '/favicon.svg',
+    shortcut: '/favicon.svg',
+  },
 }
 
 export default function RootLayout({
