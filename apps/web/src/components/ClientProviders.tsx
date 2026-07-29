@@ -151,11 +151,16 @@ function BridgeSession({ children }: { children: ReactNode }) {
     };
   }, [session, status, attempt]);
 
-  // Force users through onboarding until they have both a username and a
-  // password (so email + password sign-in works next time). Applies to Google
-  // and email sign-in alike, including pre-existing accounts with no password.
   useEffect(() => {
     if (!ready || !profile) return;
+
+    // Already logged in — login page is pointless.
+    if (pathname === '/login') {
+      router.replace('/dashboard');
+      return;
+    }
+
+    // Force through onboarding until they have both a username and a password.
     if (PUBLIC_PATHS.includes(pathname)) return;
     if (!profile.username || !profile.hasPassword) {
       router.replace('/onboarding');
