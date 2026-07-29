@@ -1,10 +1,9 @@
-import rateLimit from 'express-rate-limit';
-import type { Request } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 const minute = 60 * 1000;
 
-const keyById = (req: Request) =>
-  (req as any).user?.id ?? req.ip ?? 'anonymous';
+const keyById = (req: any) =>
+  req.user?.id ?? (req.ip ? ipKeyGenerator(req.ip) : 'anonymous');
 
 export const strictAuth = rateLimit({
   windowMs: 1 * minute,
