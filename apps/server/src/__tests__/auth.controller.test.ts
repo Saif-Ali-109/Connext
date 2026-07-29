@@ -86,4 +86,31 @@ describe('auth controller', () => {
       expect(res.status).toHaveBeenCalledWith(400);
     });
   });
+
+  describe('uploadPublicKey', () => {
+    it('returns 401 if no user', async () => {
+      const { uploadPublicKey } = await import('../controllers/auth.controller');
+      const res = makeRes();
+      await uploadPublicKey(makeReq({ user: undefined }), res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 400 if publicKey missing', async () => {
+      const { uploadPublicKey } = await import('../controllers/auth.controller');
+      const res = makeRes();
+      await uploadPublicKey(makeReq({ body: {} }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('updates user and returns ok', async () => {
+      const { uploadPublicKey } = await import('../controllers/auth.controller');
+      const res = makeRes();
+      await uploadPublicKey(
+        makeReq({ body: { publicKey: 'base64-encoded-public-key' } }),
+        res
+      );
+      expect(mockDb.set).toHaveBeenCalledWith(expect.objectContaining({ publicKey: 'base64-encoded-public-key' }));
+      expect(res.json).toHaveBeenCalledWith({ ok: true });
+    });
+  });
 });
