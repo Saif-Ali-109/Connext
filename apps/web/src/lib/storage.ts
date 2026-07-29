@@ -6,17 +6,17 @@ export interface CachedChatContact {
   customName?: string;
 }
 
-export const setEncryptedItem = (key: string, value: string) => {
+export const setEncodedItem = (key: string, value: string) => {
   if (typeof window === 'undefined') return;
   try {
     const encoded = btoa(unescape(encodeURIComponent(value)));
     localStorage.setItem(key, encoded);
-  } catch (e) {
-    console.error('Encryption failed', e);
+  } catch {
+    // ignore encode errors
   }
 };
 
-export const getEncryptedItem = (key: string): string | null => {
+export const getEncodedItem = (key: string): string | null => {
   if (typeof window === 'undefined') return null;
   try {
     const item = localStorage.getItem(key);
@@ -31,7 +31,7 @@ export const getEncryptedItem = (key: string): string | null => {
   }
 };
 
-export const removeEncryptedItem = (key: string) => {
+const removeItem = (key: string) => {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(key);
 };
@@ -56,8 +56,5 @@ export const loadCachedContacts = (userId: string): CachedChatContact[] => {
 
 export const clearAuthSession = () => {
   if (typeof window === 'undefined') return;
-  removeEncryptedItem('auth_address');
-  removeEncryptedItem('auth_publicKey');
-  removeEncryptedItem('auth_user_id');
-  localStorage.removeItem('auth_user_id');
+  removeItem('auth_user_id');
 };

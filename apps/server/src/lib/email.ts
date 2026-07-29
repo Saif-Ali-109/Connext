@@ -1,4 +1,5 @@
 import { BREVO_API_KEY, EMAIL_FROM } from './constants';
+import { logger } from './logger';
 
 const BREVO_SEND_TIMEOUT_MS = 10_000;
 
@@ -15,7 +16,7 @@ export async function sendEmail(params: {
   htmlContent?: string;
 }): Promise<void> {
   if (!BREVO_API_KEY) {
-    console.warn('[email] BREVO_API_KEY not configured. Skipping email send.');
+    logger.warn('[email] BREVO_API_KEY not configured. Skipping email send.');
     return;
   }
 

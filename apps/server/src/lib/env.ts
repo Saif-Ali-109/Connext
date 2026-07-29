@@ -1,4 +1,4 @@
-const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+import { logger } from './logger';
 
 function isProduction() {
   return process.env.NODE_ENV === 'production';
@@ -13,7 +13,7 @@ export function readEnv(name: string, fallback: string, options: { requiredInPro
   }
 
   if (!isProduction()) {
-    console.warn(`[env] Missing ${name}; using development fallback.`);
+    logger.warn({ env: name }, `Missing env var ${name}; using development fallback`);
   }
 
   return fallback;
@@ -28,8 +28,6 @@ export function readNumberEnv(name: string, fallback: number, options: { require
     throw new Error(`Environment variable ${name} must be a valid number.`);
   }
 
-  console.warn(`[env] Invalid ${name}; using ${fallback}.`);
+  logger.warn({ env: name, fallback }, `Invalid env var ${name}; using fallback`);
   return fallback;
 }
-
-export { ZERO_ADDRESS };

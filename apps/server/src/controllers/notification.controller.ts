@@ -1,65 +1,47 @@
 import { Response } from 'express';
 import { and, eq, or } from 'drizzle-orm';
 import { users, chatRequests } from '@connext/db';
-import { isFcmConfigured, sendDataNotification } from '../lib/fcm';
+import { AuthRequest } from '../middleware/auth.middleware';
 import { getDb } from '../lib/constants';
+import { asyncHandler } from '../lib/asyncHandler';
 
-export const sendPushNotification = async (req: any, res: Response) => {
-  try {
-    if (!isFcmConfigured()) {
-      return res.status(500).json({ error: 'FCM is not configured' });
-    }
+export const sendPushNotification = asyncHandler(async (req: any, res: Response) => {
+  const { userId, title, body } = req.body as { userId?: string; title?: string; body?: string };
+  const senderUserId = req.user?.id;
 
-    const { token, title, body, data } = req.body;
-    if (!token || !title || !body) {
-      return res.status(400).json({ error: 'token, title, and body are required' });
-    }
-
-    const senderId = req.user?.id;
-    if (!senderId) {
-      return res.status(401).json({ error: 'Unauthorized: No valid session' });
-    }
-
-    const db = getDb();
-    const targetUser = await db.query.users.findFirst({
-      where: eq(users.fcmToken, String(token)),
-    });
-    if (!targetUser) {
-      return res.status(404).json({ error: 'Target user not found for this device token' });
-    }
-
-    const chatConnection = await db.query.chatRequests.findFirst({
-      where: and(
-        or(
-          and(
-            eq(chatRequests.fromUserId, senderId),
-            eq(chatRequests.toUserId, targetUser.id)
-          ),
-          and(
-            eq(chatRequests.fromUserId, targetUser.id),
-            eq(chatRequests.toUserId, senderId)
-          )
-        ),
-        eq(chatRequests.status, 'accepted')
-      ),
-    });
-
-    if (!chatConnection) {
-      return res.status(403).json({
-        error: 'Notifications can only be sent to users with an accepted chat connection',
-      });
-    }
-
-    const messageId = await sendDataNotification({
-      token: String(token),
-      title: String(title),
-      body: String(body),
-      data: typeof data === 'object' && data ? data : {},
-    });
-
-    return res.status(200).json({ messageId });
-  } catch (error) {
-    console.error('Error in sendPushNotification:', error);
-    return res.status(500).json({ error: 'Failed to send notification' });
+  if (!senderUserId || !userId || !title || !body) {
+    return res.status(400).json({ error: 'Missing required fields' });
   }
-};
+
+  const db = getDb();
+  const recipient = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+  });
+
+  if (!recipient?.fcmToken) {
+    return res.status(400).json({ error: 'Recipient has no FCM token' });
+  }
+
+  const connection = await db.query.chatRequests.findFirst({
+    where: and(
+      or(
+        and(eq(chatRequests.fromUserId, senderUserId), eq(chatRequests.toUserId, userId)),
+        and(eq(chatRequests.fromUserId, userId), eq(chatRequests.toUserId, senderUserId))
+      ),
+      eq(chatRequests.status, 'accepted')
+    ),
+  });
+
+  if (!connection) {
+    return res.status(403).json({ error: 'No accepted chat connection between these users' });
+  }
+
+  const admin = await import('firebase-admin');
+  await admin.messaging().send({
+    token: recipient.fcmToken,
+    notification: { title, body },
+    data: { senderUserId },
+  });
+
+  return res.status(200).json({ ok: true });
+});

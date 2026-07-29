@@ -1,5 +1,3 @@
-import { getEncryptedItem } from './storage';
-
 export function getAuthenticatedHeaders(headers?: HeadersInit): Headers {
   return new Headers(headers);
 }
