@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { MessageSquare, Search, Link2, Check } from 'lucide-react';
+import { MessageSquare, Search as SearchIcon, Link2, Check, FileText } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { getRoomId } from '../../lib/roomId';
 import { getApiBaseUrl } from '../../lib/api';
@@ -26,6 +26,15 @@ export interface Contact {
   toCustomName?: string;
 }
 
+interface SearchResult {
+  messageId: string;
+  roomId: string;
+  snippet: string;
+  isEncrypted: boolean;
+  sender: { id: string; username?: string | null; displayName?: string | null } | null;
+  createdAt: string;
+}
+
 interface Props {
   contacts: Contact[];
   unreadCounts: Record<string, number>;
@@ -37,6 +46,9 @@ export default function ChatsSection({ contacts, unreadCounts, userId, busy }: P
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const otherUser = (c: Contact) =>
     c.fromUserId === userId || c.from?.id === userId ? c.to : c.from;
@@ -44,6 +56,10 @@ export default function ChatsSection({ contacts, unreadCounts, userId, busy }: P
   const openChat = (c: Contact) => {
     const other = otherUser(c);
     router.push(`/chat/${getRoomId(userId, other.id)}`);
+  };
+
+  const openSearchResult = (r: SearchResult) => {
+    router.push(`/chat/${r.roomId}`);
   };
 
   const createInvite = async () => {
@@ -59,14 +75,45 @@ export default function ChatsSection({ contacts, unreadCounts, userId, busy }: P
     }
   };
 
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setSearchResults(null);
+      return;
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(`${SERVER_URL}/chat/search?q=${encodeURIComponent(q)}`, {
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSearchResults(data.results ?? []);
+        }
+      } catch {
+        // silent
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [searchQuery]);
+
   const filtered = useMemo(
     () => contacts.filter((c) => {
       const o = otherUser(c);
       const label = (c.fromCustomName || c.toCustomName || o?.displayName || o?.username || o?.email || '').toLowerCase();
       return label.includes(searchQuery.toLowerCase());
     }),
-    [contacts, searchQuery]
+    [contacts, searchQuery, otherUser]
   );
+
+  const showResults = searchResults !== null && searchQuery.trim().length >= 2;
 
   return (
     <>
@@ -105,60 +152,151 @@ export default function ChatsSection({ contacts, unreadCounts, userId, busy }: P
       </AnimatePresence>
 
       <IconField
-        icon={<Search className="w-4 h-4" />}
+        icon={<SearchIcon className="w-4 h-4" />}
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        placeholder="Filter contacts…"
+        placeholder="Search contacts or messages…"
       />
 
-      {filtered.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.3, ease: 'easeOut' }}
-          className="text-center py-16 text-text-secondary space-y-2"
-        >
-          <MessageSquare className="w-10 h-10 mx-auto opacity-40" />
-          <p>No chats yet. Search for a username or share an invite link.</p>
-        </motion.div>
-      ) : (
-        <motion.ul
-          variants={listContainer}
-          initial="hidden"
-          animate="show"
-          className="divide-y divide-border rounded-xl border border-border overflow-hidden bg-background-primary/60 backdrop-blur-md"
-        >
-          {filtered.map((c) => {
-            const o = otherUser(c);
-            const label = (c.fromUserId === userId ? c.fromCustomName : c.toCustomName) ||
-              o?.displayName || o?.username || o?.email || o?.id;
-            const unread = unreadCounts[o?.id] || 0;
-            return (
-              <motion.li key={c.id} variants={listItem}>
-                <motion.button
-                  whileHover={{ x: 4 }}
-                  onClick={() => openChat(c)}
-                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-background-secondary text-left"
-                >
-                  <div>
-                    <div className="font-medium text-text-primary">{label}</div>
-                    <div className="text-xs text-text-muted">@{o?.username || 'user'}</div>
-                  </div>
-                  {unread > 0 && (
-                    <motion.span
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      transition={{ type: 'spring', stiffness: 500, damping: 20 }}
-                      className="rounded-full bg-accent text-white text-xs px-2 py-0.5"
+      {showResults ? (
+        <div className="space-y-3">
+          {searching && (
+            <p className="text-xs text-text-muted animate-pulse">Searching messages…</p>
+          )}
+
+          {searchResults.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
+                Messages
+              </p>
+              <motion.ul
+                variants={listContainer}
+                initial="hidden"
+                animate="show"
+                className="divide-y divide-border rounded-xl border border-border overflow-hidden bg-background-primary/60 backdrop-blur-md"
+              >
+                {searchResults.map((r) => (
+                  <motion.li key={r.messageId} variants={listItem}>
+                    <motion.button
+                      whileHover={{ x: 4 }}
+                      onClick={() => openSearchResult(r)}
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-background-secondary text-left"
                     >
-                      {unread}
-                    </motion.span>
-                  )}
-                </motion.button>
-              </motion.li>
-            );
-          })}
-        </motion.ul>
+                      <FileText className="w-4 h-4 shrink-0 text-text-muted" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs text-text-muted">
+                          @{r.sender?.username || 'unknown'}
+                        </div>
+                        <div className="text-sm text-text-primary truncate">
+                          {r.isEncrypted ? '[encrypted message]' : r.snippet}
+                        </div>
+                      </div>
+                    </motion.button>
+                  </motion.li>
+                ))}
+              </motion.ul>
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
+              Contacts
+            </p>
+            {filtered.length === 0 ? (
+              <p className="text-sm text-text-secondary py-4 text-center">No matching contacts</p>
+            ) : (
+              <motion.ul
+                variants={listContainer}
+                initial="hidden"
+                animate="show"
+                className="divide-y divide-border rounded-xl border border-border overflow-hidden bg-background-primary/60 backdrop-blur-md"
+              >
+                {filtered.map((c) => {
+                  const o = otherUser(c);
+                  const label = (c.fromUserId === userId ? c.fromCustomName : c.toCustomName) ||
+                    o?.displayName || o?.username || o?.email || o?.id;
+                  const unread = unreadCounts[o?.id] || 0;
+                  return (
+                    <motion.li key={c.id} variants={listItem}>
+                      <motion.button
+                        whileHover={{ x: 4 }}
+                        onClick={() => openChat(c)}
+                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-background-secondary text-left"
+                      >
+                        <div>
+                          <div className="font-medium text-text-primary">{label}</div>
+                          <div className="text-xs text-text-muted">@{o?.username || 'user'}</div>
+                        </div>
+                        {unread > 0 && (
+                          <motion.span
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            transition={{ type: 'spring', stiffness: 500, damping: 20 }}
+                            className="rounded-full bg-accent text-white text-xs px-2 py-0.5"
+                          >
+                            {unread}
+                          </motion.span>
+                        )}
+                      </motion.button>
+                    </motion.li>
+                  );
+                })}
+              </motion.ul>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
+          {filtered.length === 0 ? (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              className="text-center py-16 text-text-secondary space-y-2"
+            >
+              <MessageSquare className="w-10 h-10 mx-auto opacity-40" />
+              <p>No chats yet. Search for a username or share an invite link.</p>
+            </motion.div>
+          ) : (
+            <motion.ul
+              variants={listContainer}
+              initial="hidden"
+              animate="show"
+              className="divide-y divide-border rounded-xl border border-border overflow-hidden bg-background-primary/60 backdrop-blur-md"
+            >
+              {filtered.map((c) => {
+                const o = otherUser(c);
+                const label = (c.fromUserId === userId ? c.fromCustomName : c.toCustomName) ||
+                  o?.displayName || o?.username || o?.email || o?.id;
+                const unread = unreadCounts[o?.id] || 0;
+                return (
+                  <motion.li key={c.id} variants={listItem}>
+                    <motion.button
+                      whileHover={{ x: 4 }}
+                      onClick={() => openChat(c)}
+                      className="w-full flex items-center justify-between px-4 py-3 hover:bg-background-secondary text-left"
+                    >
+                      <div>
+                        <div className="font-medium text-text-primary">{label}</div>
+                        <div className="text-xs text-text-muted">@{o?.username || 'user'}</div>
+                      </div>
+                      {unread > 0 && (
+                        <motion.span
+                          initial={{ scale: 0 }}
+                          animate={{ scale: 1 }}
+                          transition={{ type: 'spring', stiffness: 500, damping: 20 }}
+                          className="rounded-full bg-accent text-white text-xs px-2 py-0.5"
+                        >
+                          {unread}
+                        </motion.span>
+                      )}
+                    </motion.button>
+                  </motion.li>
+                );
+              })}
+            </motion.ul>
+          )}
+        </>
       )}
     </>
   );

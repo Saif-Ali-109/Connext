@@ -6,6 +6,7 @@ import {
   removeRequest,
   getMessages,
   sendMessage,
+  searchMessages,
   getUnreadMessageCounts,
   updateContactName,
   disconnectChat,
@@ -33,6 +34,7 @@ router.get('/unreadCounts', authenticateToken, getUnreadMessageCounts);
 router.put('/contact-name', authenticateToken, standard, updateContactName);
 router.post('/disconnect', authenticateToken, disconnectChat);
 router.get('/online-status/:userId', authenticateToken, getOnlineStatus);
+router.get('/search', authenticateToken, standard, searchMessages);
 router.post('/invite', authenticateToken, inviteLimiter, createInvite);
 router.post('/invite/accept', authenticateToken, acceptInvite);
 

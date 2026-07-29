@@ -1,3 +1,4 @@
+import { relations, sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -10,7 +11,6 @@ import {
 } from 'drizzle-orm/pg-core';
 
 export const MESSAGE_MAX_LENGTH = 5000;
-import { relations } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 
 /** Auth.js + app user profile (extended) */
@@ -102,8 +102,15 @@ export const messages = pgTable(
     index('messages_room_id_timestamp_idx').on(t.roomId, t.timestamp),
     index('messages_sender_id_idx').on(t.senderId),
     index('messages_read_room_id_idx').on(t.roomId, t.read),
+    index('messages_content_trgm_idx').using(
+      'gin',
+      sql`${t.content} gin_trgm_ops`
+    ),
   ]
 );
+
+/** Enable pg_trgm extension for trigram-based full-text search. */
+export const enablePgTrgm = sql`CREATE EXTENSION IF NOT EXISTS pg_trgm`;
 
 export const chatRequests = pgTable(
   'chat_request',

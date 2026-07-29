@@ -652,6 +652,79 @@ export const setOnlineSocketsRef = (ref: Map<string, Set<string>>) => {
   onlineSocketsByUserIdRef = ref;
 };
 
+export const searchMessages = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const authenticatedUserId = getAuthenticatedUserId(req);
+  if (!authenticatedUserId) {
+    return sendError(res, 'Unauthorized', 401);
+  }
+
+  const q = String(req.query.q || '').trim();
+  if (!q || q.length < 2) {
+    return sendError(res, 'Query must be at least 2 characters', 400);
+  }
+  if (q.length > 100) {
+    return sendError(res, 'Query too long (max 100 characters)', 400);
+  }
+
+  const db = getDb();
+
+  const accepted = await db
+    .select({ fromUserId: chatRequests.fromUserId, toUserId: chatRequests.toUserId })
+    .from(chatRequests)
+    .where(
+      and(
+        or(
+          eq(chatRequests.fromUserId, authenticatedUserId),
+          eq(chatRequests.toUserId, authenticatedUserId)
+        ),
+        eq(chatRequests.status, 'accepted')
+      )
+    );
+
+  if (accepted.length === 0) {
+    return sendSuccess(res, { results: [] });
+  }
+
+  const roomIds = accepted.map((r) => getRoomId(r.fromUserId, r.toUserId));
+
+  const pattern = `%${q}%`;
+  const rows = await db
+    .select({
+      id: messages.id,
+      roomId: messages.roomId,
+      content: messages.content,
+      encryptedContent: messages.encryptedContent,
+      senderId: messages.senderId,
+      timestamp: messages.timestamp,
+    })
+    .from(messages)
+    .where(
+      and(
+        inArray(messages.roomId, roomIds),
+        sql`${messages.content} ILIKE ${pattern}`
+      )
+    )
+    .orderBy(desc(messages.timestamp))
+    .limit(20);
+
+  const senderIds = [...new Set(rows.map((r) => r.senderId))];
+  const userRows = senderIds.length > 0
+    ? await db.select().from(users).where(inArray(users.id, senderIds))
+    : [];
+  const userMap = new Map(userRows.map((u) => [u.id, publicUser(u)]));
+
+  const results = rows.map((msg) => ({
+    messageId: msg.id,
+    roomId: msg.roomId,
+    snippet: (msg.content ?? '').substring(0, 200),
+    isEncrypted: !!msg.encryptedContent && !msg.content,
+    sender: userMap.get(msg.senderId) ?? null,
+    createdAt: msg.timestamp,
+  }));
+
+  return sendSuccess(res, { results, total: results.length });
+});
+
 export const getOnlineStatus = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { userId } = req.params;
   const authenticatedUserId = getAuthenticatedUserId(req);
