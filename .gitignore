@@ -22,6 +22,7 @@ dist/
 
 # IDE, Cursor & AI Editor configs
 .claude/
+.opencode/
 .gemini/
 .cursor/
 .idea/
