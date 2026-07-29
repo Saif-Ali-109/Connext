@@ -298,6 +298,22 @@ export const updateFcmToken = asyncHandler(async (req: AuthRequest, res: Respons
   return res.status(200).json({ ok: true });
 });
 
+export const uploadPublicKey = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { publicKey } = req.body as { publicKey?: string };
+  if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!publicKey || typeof publicKey !== 'string') {
+    return res.status(400).json({ error: 'publicKey is required' });
+  }
+
+  const db = getDb();
+  await db
+    .update(users)
+    .set({ publicKey, updatedAt: new Date() })
+    .where(eq(users.id, req.user.id));
+
+  return res.status(200).json({ ok: true });
+});
+
 export const searchUsers = asyncHandler(async (req: AuthRequest, res: Response) => {
   const q = String(req.query.q || req.params.query || '').trim();
   if (!q || q.length < 2) {

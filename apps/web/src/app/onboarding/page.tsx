@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
 import { getApiBaseUrl } from '../../lib/api';
+import { generateKeyPair, storeKeyPair } from '../../lib/crypto';
 import PasswordInput from '../../components/PasswordInput';
 import { AnimatedButton, Spinner } from '../../components/ui/motion';
 
@@ -74,6 +75,21 @@ export default function OnboardingPage() {
       }
       if (!res.ok) throw new Error(data.error || 'Failed to save username');
       await refreshProfile();
+
+      // Generate E2EE key pair and upload the public key
+      try {
+        const { publicKey, privateKey } = await generateKeyPair();
+        storeKeyPair(publicKey, privateKey);
+        await fetch(`${SERVER_URL}/auth/public-key`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ publicKey }),
+        });
+      } catch {
+        // non-blocking: keys can be regenerated later
+      }
+
       router.replace('/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save username');

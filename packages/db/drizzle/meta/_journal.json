@@ -8,6 +8,13 @@
       "when": 1785267539751,
       "tag": "0000_majestic_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785343207812,
+      "tag": "0001_black_magik",
+      "breakpoints": true
     }
   ]
 }

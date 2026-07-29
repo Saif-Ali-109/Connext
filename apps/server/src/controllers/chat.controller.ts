@@ -262,6 +262,8 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
       id: messages.id,
       senderId: messages.senderId,
       content: messages.content,
+      encryptedContent: messages.encryptedContent,
+      encryptedContentForSender: messages.encryptedContentForSender,
       read: messages.read,
       deliveredAt: messages.deliveredAt,
       timestamp: messages.timestamp,
@@ -279,6 +281,8 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
     id: msg.id,
     sender: msg.senderId === authenticatedUserId ? 'me' : 'other',
     text: msg.content || '',
+    encryptedContent: msg.encryptedContent ?? null,
+    encryptedContentForSender: msg.encryptedContentForSender ?? null,
     createdAt: msg.timestamp,
     deliveryState: msg.read ? 'read' : msg.deliveredAt ? 'delivered' : 'sent',
   }));
@@ -366,6 +370,8 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
       senderId: authenticatedUserId,
       roomId,
       content: content || bodyText,
+      encryptedContent: encryptedContent ?? null,
+      encryptedContentForSender: encryptedContentForSender ?? null,
     })
     .returning();
 

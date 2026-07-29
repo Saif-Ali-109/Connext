@@ -9,6 +9,7 @@ import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
 import { otherUserIdFromRoom } from '../../lib/roomId';
 import { getApiBaseUrl } from '../../lib/api';
+import { encryptMessage, decryptMessage, decryptWithKey, getStoredPublicKey } from '../../lib/crypto';
 import Navigation from '../../components/Navigation';
 import { Spinner } from '../../components/ui/motion';
 
@@ -80,6 +81,8 @@ export default function ChatClient() {
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
   const [peerLabel, setPeerLabel] = useState('Chat');
+  const [peerPublicKey, setPeerPublicKey] = useState<string | null>(null);
+  const ownPublicKeyRef = useRef<string | null>(null);
   const [sending, setSending] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -103,25 +106,43 @@ export default function ChatClient() {
       );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to load messages');
-      const rows: ChatMessage[] = (data.messages || [])
-        .slice()
-        .reverse()
-        .map(
-          (m: {
-            id: string;
-            sender: string;
-            text: string;
-            createdAt: string;
-            deliveryState?: DeliveryState;
-          }) => ({
-            id: m.id,
-            key: m.id,
-            sender: m.sender === 'me' ? 'me' : ('other' as const),
-            text: m.text,
-            createdAt: m.createdAt,
-            status: m.sender === 'me' ? m.deliveryState ?? 'sent' : undefined,
-          })
-        );
+      const rows: ChatMessage[] = await Promise.all(
+        (data.messages || [])
+          .slice()
+          .reverse()
+          .map(
+            async (m: {
+              id: string;
+              sender: string;
+              text: string;
+              encryptedContent?: string | null;
+              encryptedContentForSender?: string | null;
+              createdAt: string;
+              deliveryState?: DeliveryState;
+            }) => {
+              let text = m.text;
+              const ciphertext =
+                m.sender === 'me'
+                  ? m.encryptedContentForSender
+                  : m.encryptedContent;
+              if (ciphertext) {
+                try {
+                  text = await decryptMessage(ciphertext);
+                } catch {
+                  text = '[encrypted]';
+                }
+              }
+              return {
+                id: m.id,
+                key: m.id,
+                sender: m.sender === 'me' ? 'me' : ('other' as const),
+                text,
+                createdAt: m.createdAt,
+                status: m.sender === 'me' ? m.deliveryState ?? 'sent' : undefined,
+              };
+            }
+          )
+      );
       setMessages(rows);
       messageIdsRef.current = new Set(rows.map((r: ChatMessage) => r.id));
     } catch (e) {
@@ -140,11 +161,17 @@ export default function ChatClient() {
       const data = await res.json();
       if (res.ok && data.id) {
         setPeerLabel(data.displayName || data.username || data.email || 'Chat');
+        setPeerPublicKey(data.publicKey ?? null);
       }
     } catch {
       // ignore
     }
   }, [otherUserId]);
+
+  // Load own public key from storage
+  useEffect(() => {
+    ownPublicKeyRef.current = getStoredPublicKey();
+  }, []);
 
   useEffect(() => {
     if (ready && userId) {
@@ -181,8 +208,9 @@ export default function ChatClient() {
     socket.on('receive_message', (payload: {
       id: string;
       sender?: { id: string };
-      content?: string;
-      encryptedContent?: string;
+      content?: string | null;
+      encryptedContent?: string | null;
+      encryptedContentForSender?: string | null;
       createdAt?: string;
       roomId?: string;
     }) => {
@@ -192,17 +220,25 @@ export default function ChatClient() {
       // Skip socket echo for own messages — optimistic add + ack already handle it
       if (mine) return;
       messageIdsRef.current.add(payload.id);
-      const text = payload.content || payload.encryptedContent || '';
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: payload.id,
-          key: payload.id,
-          sender: 'other',
-          text,
-          createdAt: payload.createdAt || new Date().toISOString(),
-        },
-      ]);
+
+      const ciphertext = payload.encryptedContent;
+      const resolveText = ciphertext
+        ? decryptMessage(ciphertext).catch(() => '[encrypted]')
+        : Promise.resolve(payload.content || '');
+
+      resolveText.then((text) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: payload.id,
+            key: payload.id,
+            sender: 'other',
+            text,
+            createdAt: payload.createdAt || new Date().toISOString(),
+          },
+        ]);
+      });
+
       socket.emit('message_delivered', { roomId, messageId: payload.id });
       socket.emit('message_read', { roomId, messageId: payload.id });
     });
@@ -246,6 +282,10 @@ export default function ChatClient() {
   const send = async () => {
     const text = draft.trim();
     if (!text || !userId || !otherUserId || sending) return;
+    if (!peerPublicKey) {
+      alert('Cannot send: peer public key not available');
+      return;
+    }
     setSending(true);
     setDraft('');
 
@@ -254,6 +294,21 @@ export default function ChatClient() {
       ...prev,
       { id: tempId, key: tempId, sender: 'me', text, createdAt: new Date().toISOString(), status: 'sending' },
     ]);
+
+    let encryptedContent: string;
+    let encryptedContentForSender: string | undefined;
+    try {
+      encryptedContent = await encryptMessage(peerPublicKey, text);
+      if (ownPublicKeyRef.current) {
+        encryptedContentForSender = await encryptMessage(ownPublicKeyRef.current, text);
+      }
+    } catch {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setDraft(text);
+      alert('Encryption failed');
+      setSending(false);
+      return;
+    }
 
     try {
       const socket = socketRef.current;
@@ -264,7 +319,9 @@ export default function ChatClient() {
             {
               messageId: tempId,
               recipientUserId: otherUserId,
-              content: text,
+              content: undefined,
+              encryptedContent,
+              encryptedContentForSender,
             },
             (ack?: { ok: boolean; error?: string; messageId?: string; delivered?: boolean }) => {
               if (!ack?.ok) {
@@ -292,7 +349,8 @@ export default function ChatClient() {
           body: JSON.stringify({
             senderId: userId,
             recipientUserId: otherUserId,
-            content: text,
+            encryptedContent,
+            encryptedContentForSender,
           }),
         });
         const data = await res.json();

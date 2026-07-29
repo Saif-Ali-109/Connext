@@ -81,11 +81,23 @@ export function registerMessagingHandlers(io: Server, socket: Socket, deps: Sock
 
         const roomId = getRoomId(currentUserId, recipient.id);
 
-        const relayPayload = {
-          id: data.messageId || `relay-${Date.now()}`,
+        const messageId = data.messageId?.startsWith('relay-') ? undefined : data.messageId;
+
+        const relayPayload: {
+          id: string;
+          sender: { id: string };
+          roomId: string;
+          content: string | null;
+          encryptedContent: string | null;
+          encryptedContentForSender: string | null;
+          createdAt: string;
+        } = {
+          id: messageId || `relay-${Date.now()}`,
           sender: { id: currentUserId },
           roomId,
-          content: data.content || bodyText,
+          content: data.content ?? null,
+          encryptedContent: data.encryptedContent ?? null,
+          encryptedContentForSender: data.encryptedContentForSender ?? null,
           createdAt: new Date().toISOString(),
         };
 
@@ -93,10 +105,12 @@ export function registerMessagingHandlers(io: Server, socket: Socket, deps: Sock
           const [dbMsg] = await db
             .insert(messages)
             .values({
-              id: relayPayload.id.startsWith('relay-') ? undefined : relayPayload.id,
+              id: messageId,
               senderId: currentUserId,
               roomId,
-              content: data.content || bodyText,
+              content: data.content ?? null,
+              encryptedContent: data.encryptedContent ?? null,
+              encryptedContentForSender: data.encryptedContentForSender ?? null,
             })
             .returning();
           relayPayload.id = dbMsg.id;

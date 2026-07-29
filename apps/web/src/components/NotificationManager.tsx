@@ -47,7 +47,7 @@ export default function NotificationManager() {
       if (!payload?.sender?.id || payload.sender.id === userId) return;
       if (pathnameRef.current?.startsWith('/chat/')) return;
 
-      const text = payload.content || payload.encryptedContent || 'New message';
+      const text = payload.content || (payload.encryptedContent ? '[Encrypted message]' : 'New message');
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         new Notification('New message', { body: text.slice(0, 120) });
       }
