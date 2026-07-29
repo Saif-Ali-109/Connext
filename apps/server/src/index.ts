@@ -15,7 +15,8 @@ import chatRoutes from './routes/chat';
 import mediaRoutes from './routes/media';
 import notificationRoutes from './routes/notifications';
 import { setOnlineSocketsRef } from './controllers/chat.controller';
-import { JWT_SECRET, PORT, connectDB, ALLOWED_ORIGINS } from './lib/constants';
+import { runMigrations } from '@connext/db';
+import { DATABASE_URL, JWT_SECRET, PORT, connectDB, ALLOWED_ORIGINS } from './lib/constants';
 import { logger } from './lib/logger';
 import { errorHandler } from './middleware/errorHandler';
 import {
@@ -160,6 +161,9 @@ async function startServer() {
     if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) {
       throw new Error('DATABASE_URL is required in production');
     }
+
+    await runMigrations(DATABASE_URL);
+    logger.info('Database migrations applied');
 
     await connectDB();
     logger.info('Connected to PostgreSQL');

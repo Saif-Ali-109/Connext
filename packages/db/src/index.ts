@@ -1,5 +1,5 @@
 export * from './schema';
-export { createDb, type Db } from './client';
+export { createDb, runMigrations, type Db } from './client';
 export { hashPassword, verifyPassword } from './password';
 
 /** Sorted user-id room key. Uses `_` so UUID hyphens stay unambiguous. */

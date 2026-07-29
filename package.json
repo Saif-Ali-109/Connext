@@ -15,7 +15,7 @@
     "build": "npm run build --workspace=@connext/db && npm run build --workspace=connext-web && npm run build --workspace=@connext/server",
     "start": "concurrently \"PORT=4001 npm run start --workspace=@connext/server\" \"npm run start --workspace=connext-web\"",
     "lint": "npm run lint --workspaces --if-present",
-    "db:push": "npm run push --workspace=@connext/db",
+    "db:migrate": "npm run migrate --workspace=@connext/db",
     "test": "npm run test --workspaces --if-present",
     "test:server": "npm run test --workspace=@connext/server",
     "test:db": "npm run test --workspace=@connext/db"
