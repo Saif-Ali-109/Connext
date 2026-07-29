@@ -9,6 +9,7 @@ import compression from 'compression';
 import pinoHttp from 'pino-http';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
+import cookie from 'cookie';
 
 import authRoutes from './routes/auth';
 import chatRoutes from './routes/chat';
@@ -117,20 +118,8 @@ app.use('/notifications', notificationRoutes);
 setOnlineSocketsRef(onlineSocketsByUserId);
 
 io.use((socket, next) => {
-  let token = socket.handshake.auth?.token as string | undefined;
-
-  if (!token) {
-    const cookieHeader = socket.handshake.headers.cookie;
-    if (cookieHeader) {
-      const cookies = Object.fromEntries(
-        cookieHeader.split('; ').map((c) => {
-          const [k, ...rest] = c.split('=');
-          return [k, rest.join('=')];
-        })
-      );
-      token = cookies['token'];
-    }
-  }
+  const token = (socket.handshake.auth?.token as string | undefined)
+    || cookie.parse(socket.handshake.headers.cookie || '')['token'];
 
   if (!token) {
     return next(new Error('Authentication error: No token provided'));

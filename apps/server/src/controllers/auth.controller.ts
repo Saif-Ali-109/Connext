@@ -89,6 +89,12 @@ export const getSession = asyncHandler(async (req: AuthRequest, res: Response) =
   return sendSuccess(res, { user: publicUser(user) });
 });
 
+export const getToken = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const token = req.cookies?.token;
+  if (!token) return sendError(res, 'No token', 401);
+  return sendSuccess(res, { token });
+});
+
 export const logout = async (_req: AuthRequest, res: Response) => {
   res.clearCookie('token', {
     httpOnly: true,

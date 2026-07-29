@@ -7,6 +7,7 @@ import {
   invites,
   getRoomId,
   isParticipantRoomId,
+  MESSAGE_MAX_LENGTH,
 } from '@connext/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { getDb } from '../lib/constants';
@@ -330,6 +331,9 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
   const bodyText = content || encryptedContent;
   if (!bodyText) {
     return sendError(res, 'content is required', 400);
+  }
+  if (bodyText.length > MESSAGE_MAX_LENGTH) {
+    return sendError(res, `content exceeds ${MESSAGE_MAX_LENGTH} characters`, 400);
   }
 
   const db = getDb();

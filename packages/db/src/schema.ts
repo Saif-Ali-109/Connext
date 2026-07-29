@@ -8,6 +8,8 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+
+export const MESSAGE_MAX_LENGTH = 5000;
 import { relations } from 'drizzle-orm';
 import { randomUUID } from 'crypto';
 

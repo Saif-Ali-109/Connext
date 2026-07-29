@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   bridgeSession,
   getSession,
+  getToken,
   logout,
   updateUsername,
   updateFcmToken,
@@ -24,6 +25,7 @@ const router = Router();
 
 router.post('/bridge', strictAuth, bridgeSession);
 router.get('/session', authenticateToken, getSession);
+router.get('/token', authenticateToken, getToken);
 router.post('/logout', authenticateToken, logout);
 router.post('/username', authenticateToken, updateUsername);
 router.post('/update-password', authenticateToken, passwordChange, updatePassword);

@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'socket.io';
 import { eq, and, or, isNull } from 'drizzle-orm';
-import { users, messages, chatRequests, getRoomId } from '@connext/db';
+import { users, messages, chatRequests, getRoomId, MESSAGE_MAX_LENGTH } from '@connext/db';
 import { getDb } from '../lib/constants';
 import { logger } from '../lib/logger';
 import type { SocketDeps } from './types';
@@ -41,6 +41,10 @@ export function registerMessagingHandlers(io: Server, socket: Socket, deps: Sock
         const bodyText = data.content || data.encryptedContent;
         if (!recipientLookup || !bodyText) {
           ack?.({ ok: false, error: 'Missing recipient or content' });
+          return;
+        }
+        if (bodyText.length > MESSAGE_MAX_LENGTH) {
+          ack?.({ ok: false, error: `content exceeds ${MESSAGE_MAX_LENGTH} characters` });
           return;
         }
 

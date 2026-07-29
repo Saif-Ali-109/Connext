@@ -185,80 +185,95 @@ export default function ChatClient() {
   useEffect(() => {
     if (!ready || !userId || !otherUserId) return;
 
-    const isRelative = SERVER_URL.startsWith('/');
-    const socket = io(isRelative ? window.location.origin : SERVER_URL, {
-      path: isRelative ? `${SERVER_URL}/socket.io` : undefined,
-      withCredentials: true,
-      transports: ['websocket', 'polling'],
-    });
-    socketRef.current = socket;
+    let cancelled = false;
+    socketRef.current?.disconnect();
 
-    socket.on('connect', () => {
-      socket.emit('join_room', { roomId, otherIdentifier: otherUserId });
-    });
+    void (async () => {
+      let token: string | undefined;
+      try {
+        const r = await fetch(`${SERVER_URL}/auth/token`, { credentials: 'include' });
+        const d = await r.json();
+        token = d.token;
+      } catch { /* fall back to cookie */ }
 
-    const updateStatus = (messageId: string, newStatus: DeliveryState) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId && m.sender === 'me'
-            ? { ...m, status: bumpStatus(m.status, newStatus) }
-            : m
-        )
-      );
-    };
+      if (cancelled) return;
 
-    socket.on('receive_message', (payload: {
-      id: string;
-      sender?: { id: string };
-      content?: string | null;
-      encryptedContent?: string | null;
-      encryptedContentForSender?: string | null;
-      createdAt?: string;
-      roomId?: string;
-    }) => {
-      if (payload.roomId && payload.roomId !== roomId) return;
-      if (messageIdsRef.current.has(payload.id)) return;
-      const mine = payload.sender?.id === userId;
-      // Skip socket echo for own messages — optimistic add + ack already handle it
-      if (mine) return;
-      messageIdsRef.current.add(payload.id);
+      const isRelative = SERVER_URL.startsWith('/');
+      const socket = io(isRelative ? window.location.origin : SERVER_URL, {
+        path: isRelative ? `${SERVER_URL}/socket.io` : undefined,
+        auth: { token },
+        withCredentials: true,
+        transports: ['websocket', 'polling'],
+      });
+      socketRef.current = socket;
 
-      const ciphertext = payload.encryptedContent;
-      const resolveText = ciphertext
-        ? decryptMessage(ciphertext).catch(() => '[encrypted]')
-        : Promise.resolve(payload.content || '');
-
-      resolveText.then((text) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: payload.id,
-            key: payload.id,
-            sender: 'other',
-            text,
-            createdAt: payload.createdAt || new Date().toISOString(),
-          },
-        ]);
+      socket.on('connect', () => {
+        socket.emit('join_room', { roomId, otherIdentifier: otherUserId });
       });
 
-      socket.emit('message_delivered', { roomId, messageId: payload.id });
-      socket.emit('message_read', { roomId, messageId: payload.id });
-    });
+      const updateStatus = (messageId: string, newStatus: DeliveryState) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId && m.sender === 'me'
+              ? { ...m, status: bumpStatus(m.status, newStatus) }
+              : m
+          )
+        );
+      };
 
-    socket.on('message_delivery_status', (data: { messageId: string; delivered: boolean }) => {
-      updateStatus(data.messageId, data.delivered ? 'delivered' : 'sent');
-    });
+      socket.on('receive_message', (payload: {
+        id: string;
+        sender?: { id: string };
+        content?: string | null;
+        encryptedContent?: string | null;
+        encryptedContentForSender?: string | null;
+        createdAt?: string;
+        roomId?: string;
+      }) => {
+        if (payload.roomId && payload.roomId !== roomId) return;
+        if (messageIdsRef.current.has(payload.id)) return;
+        const mine = payload.sender?.id === userId;
+        if (mine) return;
+        messageIdsRef.current.add(payload.id);
 
-    socket.on('message_delivered_relay', (data: { messageId: string }) => {
-      updateStatus(data.messageId, 'delivered');
-    });
+        const ciphertext = payload.encryptedContent;
+        const resolveText = ciphertext
+          ? decryptMessage(ciphertext).catch(() => '[encrypted]')
+          : Promise.resolve(payload.content || '');
 
-    socket.on('message_read_relay', (data: { messageId: string }) => {
-      updateStatus(data.messageId, 'read');
-    });
+        resolveText.then((text) => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: payload.id,
+              key: payload.id,
+              sender: 'other',
+              text,
+              createdAt: payload.createdAt || new Date().toISOString(),
+            },
+          ]);
+        });
+
+        socket.emit('message_delivered', { roomId, messageId: payload.id });
+        socket.emit('message_read', { roomId, messageId: payload.id });
+      });
+
+      socket.on('message_delivery_status', (data: { messageId: string; delivered: boolean }) => {
+        updateStatus(data.messageId, data.delivered ? 'delivered' : 'sent');
+      });
+
+      socket.on('message_delivered_relay', (data: { messageId: string }) => {
+        updateStatus(data.messageId, 'delivered');
+      });
+
+      socket.on('message_read_relay', (data: { messageId: string }) => {
+        updateStatus(data.messageId, 'read');
+      });
+    })();
 
     return () => {
-      socket.disconnect();
+      cancelled = true;
+      socketRef.current?.disconnect();
       socketRef.current = null;
     };
   }, [ready, userId, otherUserId, roomId]);
@@ -281,9 +296,15 @@ export default function ChatClient() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length]);
 
+const MAX_MSG_LENGTH = 5000;
+
   const send = async () => {
     const text = draft.trim();
     if (!text || !userId || !otherUserId || sending) return;
+    if (text.length > MAX_MSG_LENGTH) {
+      alert(`Message too long (max ${MAX_MSG_LENGTH} characters)`);
+      return;
+    }
     setSending(true);
     setDraft('');
 
@@ -436,8 +457,9 @@ export default function ChatClient() {
       >
         <input
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.target.value.slice(0, MAX_MSG_LENGTH))}
           placeholder="Type a message…"
+          maxLength={MAX_MSG_LENGTH}
           className="flex-1 rounded-xl border border-border bg-input-bg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25"
         />
         <motion.button
