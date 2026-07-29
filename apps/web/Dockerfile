@@ -7,7 +7,7 @@ FROM base AS deps
 COPY package.json package-lock.json .npmrc ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/db/package.json ./packages/db/
-COPY packages/types/package.json ./packages/types/
+
 RUN npm ci
 
 # Build @connext/db first, then the web app

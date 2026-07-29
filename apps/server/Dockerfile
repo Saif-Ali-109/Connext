@@ -7,7 +7,7 @@ FROM base AS deps
 COPY package.json package-lock.json .npmrc ./
 COPY apps/server/package.json ./apps/server/
 COPY packages/db/package.json ./packages/db/
-COPY packages/types/package.json ./packages/types/
+
 RUN npm ci
 
 # Build @connext/db first, then the server
@@ -32,6 +32,6 @@ COPY --from=builder /app/apps/server/dist ./apps/server/dist
 COPY --from=builder /app/apps/server/package.json ./apps/server/package.json
 COPY --from=builder /app/package.json ./package.json
 
-EXPOSE 5000
+EXPOSE 4001
 
 CMD ["npm", "run", "start", "--workspace=@connext/server"]
