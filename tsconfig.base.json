@@ -13,7 +13,6 @@
     "moduleResolution": "node",
     "baseUrl": ".",
     "paths": {
-      "@connext/types": ["packages/types"],
       "@connext/db": ["packages/db/dist"]
     }
   }

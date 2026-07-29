@@ -7,6 +7,7 @@ import { getDb, JWT_SECRET, JWT_EXPIRES_DAYS } from '../lib/constants';
 import { verifyBridgePayload, type BridgePayload } from '../lib/bridge';
 import { sendEmail } from '../lib/email';
 import { asyncHandler } from '../lib/asyncHandler';
+import { sendSuccess, sendError } from '../lib/response';
 import { publicUser } from '../lib/user';
 import crypto from 'crypto';
 
@@ -30,7 +31,7 @@ function setAuthCookie(res: Response, user: { id: string; email?: string | null;
 export const bridgeSession = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { payload, sig } = req.body as { payload?: BridgePayload; sig?: string };
   if (!payload || !sig || !verifyBridgePayload(payload, sig)) {
-    return res.status(401).json({ error: 'Invalid bridge signature' });
+    return sendError(res, 'Invalid bridge signature', 401);
   }
 
   const db = getDb();
@@ -68,12 +69,12 @@ export const bridgeSession = asyncHandler(async (req: AuthRequest, res: Response
   }
 
   setAuthCookie(res, user);
-  return res.status(200).json({ user: publicUser(user) });
+  return sendSuccess(res, { user: publicUser(user) });
 });
 
 export const getSession = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!req.user?.id) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return sendError(res, 'Unauthorized', 401);
   }
 
   const db = getDb();
@@ -82,10 +83,10 @@ export const getSession = asyncHandler(async (req: AuthRequest, res: Response) =
   });
 
   if (!user) {
-    return res.status(404).json({ error: 'User not found' });
+    return sendError(res, 'User not found', 404);
   }
 
-  return res.status(200).json({ user: publicUser(user) });
+  return sendSuccess(res, { user: publicUser(user) });
 });
 
 export const logout = async (_req: AuthRequest, res: Response) => {
@@ -94,7 +95,7 @@ export const logout = async (_req: AuthRequest, res: Response) => {
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
   });
-  return res.status(200).json({ ok: true });
+  return sendSuccess(res, { ok: true });
 };
 
 export const updateUsername = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -105,15 +106,13 @@ export const updateUsername = asyncHandler(async (req: AuthRequest, res: Respons
   };
 
   if (!req.user?.id) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return sendError(res, 'Unauthorized', 401);
   }
 
   if (username) {
     const normalized = username.trim().toLowerCase();
     if (!/^[a-z0-9_]{3,24}$/.test(normalized)) {
-      return res.status(400).json({
-        error: 'Username must be 3-24 chars: lowercase letters, numbers, underscore',
-      });
+      return sendError(res, 'Username must be 3-24 chars: lowercase letters, numbers, underscore', 400);
     }
 
     const db = getDb();
@@ -124,7 +123,7 @@ export const updateUsername = asyncHandler(async (req: AuthRequest, res: Respons
     let passwordHash: string | undefined;
     if (!existing?.passwordHash) {
       if (!password || password.length < 8) {
-        return res.status(400).json({ error: 'Password must be at least 8 characters' });
+        return sendError(res, 'Password must be at least 8 characters', 400);
       }
       passwordHash = await hashPassword(password);
     }
@@ -133,7 +132,7 @@ export const updateUsername = asyncHandler(async (req: AuthRequest, res: Respons
       where: eq(users.username, normalized),
     });
     if (taken && taken.id !== req.user.id) {
-      return res.status(409).json({ error: 'Username already taken' });
+      return sendError(res, 'Username already taken', 409);
     }
 
     try {
@@ -148,10 +147,10 @@ export const updateUsername = asyncHandler(async (req: AuthRequest, res: Respons
         .where(eq(users.id, req.user.id))
         .returning();
 
-      return res.status(200).json({ user: publicUser(updated) });
+      return sendSuccess(res, { user: publicUser(updated) });
     } catch (err) {
       if (err && typeof err === 'object' && 'code' in err && (err as { code?: string }).code === '23505') {
-        return res.status(409).json({ error: 'Username already taken' });
+        return sendError(res, 'Username already taken', 409);
       }
       throw err;
     }
@@ -164,17 +163,17 @@ export const updateUsername = asyncHandler(async (req: AuthRequest, res: Respons
       .set({ displayName: displayName.trim(), updatedAt: new Date() })
       .where(eq(users.id, req.user.id))
       .returning();
-    return res.status(200).json({ user: publicUser(updated) });
+    return sendSuccess(res, { user: publicUser(updated) });
   }
 
-  return res.status(400).json({ error: 'username or displayName required' });
+  return sendError(res, 'username or displayName required', 400);
 });
 
 export const updatePassword = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { password } = req.body as { password?: string };
-  if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.user?.id) return sendError(res, 'Unauthorized', 401);
   if (!password || password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    return sendError(res, 'Password must be at least 8 characters', 400);
   }
 
   const db = getDb();
@@ -185,7 +184,7 @@ export const updatePassword = asyncHandler(async (req: AuthRequest, res: Respons
     .where(eq(users.id, req.user.id))
     .returning();
 
-  return res.status(200).json({ user: publicUser(updated) });
+  return sendSuccess(res, { user: publicUser(updated) });
 });
 
 const VERIFICATION_CODE_WINDOW_MS = 10 * 60 * 1000;
@@ -193,12 +192,12 @@ const VERIFICATION_CODE_MAX_PER_WINDOW = 3;
 
 export const sendVerificationEmail = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { email } = req.body as { email?: string };
-  if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.user?.id) return sendError(res, 'Unauthorized', 401);
   if (
     !email ||
     !/^[a-z0-9]+(?:[._-][a-z0-9]+)*@[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,}$/i.test(email)
   ) {
-    return res.status(400).json({ error: 'Invalid email address' });
+    return sendError(res, 'Invalid email address', 400);
   }
 
   const db = getDb();
@@ -215,7 +214,7 @@ export const sendVerificationEmail = asyncHandler(async (req: AuthRequest, res: 
 
   const count = Number(recent[0]?.count ?? 0);
   if (count >= VERIFICATION_CODE_MAX_PER_WINDOW) {
-    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+    return sendError(res, 'Too many requests. Please try again later.', 429);
   }
 
   const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
@@ -241,14 +240,14 @@ export const sendVerificationEmail = asyncHandler(async (req: AuthRequest, res: 
     </div>`,
   });
 
-  return res.status(200).json({ ok: true });
+  return sendSuccess(res, { ok: true });
 });
 
 export const verifyEmail = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { email, code } = req.body as { email?: string; code?: string };
-  if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.user?.id) return sendError(res, 'Unauthorized', 401);
   if (!email || !code) {
-    return res.status(400).json({ error: 'Email and code are required' });
+    return sendError(res, 'Email and code are required', 400);
   }
 
   const db = getDb();
@@ -264,7 +263,7 @@ export const verifyEmail = asyncHandler(async (req: AuthRequest, res: Response) 
   });
 
   if (!existing) {
-    return res.status(400).json({ error: 'Invalid or expired code' });
+    return sendError(res, 'Invalid or expired code', 400);
   }
 
   await db
@@ -282,12 +281,12 @@ export const verifyEmail = asyncHandler(async (req: AuthRequest, res: Response) 
     .where(eq(users.id, req.user.id))
     .returning();
 
-  return res.status(200).json({ user: publicUser(updated) });
+  return sendSuccess(res, { user: publicUser(updated) });
 });
 
 export const updateFcmToken = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { fcmToken } = req.body as { fcmToken?: string };
-  if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.user?.id) return sendError(res, 'Unauthorized', 401);
 
   const db = getDb();
   await db
@@ -295,14 +294,14 @@ export const updateFcmToken = asyncHandler(async (req: AuthRequest, res: Respons
     .set({ fcmToken: fcmToken ?? null, updatedAt: new Date() })
     .where(eq(users.id, req.user.id));
 
-  return res.status(200).json({ ok: true });
+  return sendSuccess(res, { ok: true });
 });
 
 export const uploadPublicKey = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { publicKey } = req.body as { publicKey?: string };
-  if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!req.user?.id) return sendError(res, 'Unauthorized', 401);
   if (!publicKey || typeof publicKey !== 'string') {
-    return res.status(400).json({ error: 'publicKey is required' });
+    return sendError(res, 'publicKey is required', 400);
   }
 
   const db = getDb();
@@ -311,20 +310,20 @@ export const uploadPublicKey = asyncHandler(async (req: AuthRequest, res: Respon
     .set({ publicKey, updatedAt: new Date() })
     .where(eq(users.id, req.user.id));
 
-  return res.status(200).json({ ok: true });
+  return sendSuccess(res, { ok: true });
 });
 
 export const searchUsers = asyncHandler(async (req: AuthRequest, res: Response) => {
   const q = String(req.query.q || req.params.query || '').trim();
   if (!q || q.length < 2) {
-    return res.status(400).json({ error: 'Query must be at least 2 characters' });
+    return sendError(res, 'Query must be at least 2 characters', 400);
   }
 
   const db = getDb();
 
   const byId = await db.query.users.findFirst({ where: eq(users.id, q) });
   if (byId) {
-    return res.status(200).json(publicUser(byId));
+    return sendSuccess(res, publicUser(byId));
   }
 
   const matches = await db
@@ -334,23 +333,23 @@ export const searchUsers = asyncHandler(async (req: AuthRequest, res: Response) 
     .limit(10);
 
   if (matches.length === 1) {
-    return res.status(200).json(publicUser(matches[0]));
+    return sendSuccess(res, publicUser(matches[0]));
   }
 
-  return res.status(200).json({ users: matches.map(publicUser) });
+  return sendSuccess(res, { users: matches.map(publicUser) });
 });
 
 export const getUserByQuery = asyncHandler(async (req: AuthRequest, res: Response) => {
   const q = String(req.query.q || req.params.query || '').trim();
   if (!q || q.length < 2) {
-    return res.status(400).json({ error: 'Query must be at least 2 characters' });
+    return sendError(res, 'Query must be at least 2 characters', 400);
   }
 
   const db = getDb();
 
   const byId = await db.query.users.findFirst({ where: eq(users.id, q) });
   if (byId) {
-    return res.status(200).json(publicUser(byId));
+    return sendSuccess(res, publicUser(byId));
   }
 
   const matches = await db
@@ -360,8 +359,8 @@ export const getUserByQuery = asyncHandler(async (req: AuthRequest, res: Respons
     .limit(10);
 
   if (matches.length === 1) {
-    return res.status(200).json(publicUser(matches[0]));
+    return sendSuccess(res, publicUser(matches[0]));
   }
 
-  return res.status(200).json({ users: matches.map(publicUser) });
+  return sendSuccess(res, { users: matches.map(publicUser) });
 });

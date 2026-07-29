@@ -11,6 +11,7 @@ import {
 import { AuthRequest } from '../middleware/auth.middleware';
 import { getDb } from '../lib/constants';
 import { asyncHandler } from '../lib/asyncHandler';
+import { sendSuccess, sendError } from '../lib/response';
 import { publicUser } from '../lib/user';
 import crypto from 'crypto';
 
@@ -29,18 +30,18 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
   const authenticatedUserId = getAuthenticatedUserId(req);
 
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
 
   const db = getDb();
   const fromUser = await db.query.users.findFirst({
     where: eq(users.id, authenticatedUserId),
   });
-  if (!fromUser) return res.status(404).json({ error: 'Sender not found' });
+  if (!fromUser) return sendError(res, 'Sender not found', 404);
 
   const lookup = toUserId || toUsername;
   if (!lookup) {
-    return res.status(400).json({ error: 'Recipient is required' });
+    return sendError(res, 'Recipient is required', 400);
   }
 
   let toUser =
@@ -50,11 +51,11 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
     }));
 
   if (!toUser) {
-    return res.status(404).json({ error: 'Recipient not found on this platform' });
+    return sendError(res, 'Recipient not found on this platform', 404);
   }
 
   if (fromUser.id === toUser.id) {
-    return res.status(400).json({ error: 'Cannot send request to yourself' });
+    return sendError(res, 'Cannot send request to yourself', 400);
   }
 
   const existing = await db.query.chatRequests.findFirst({
@@ -77,11 +78,11 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
         })
         .where(eq(chatRequests.id, existing.id))
         .returning();
-      return res.status(200).json({ message: 'Request re-opened', request: updated });
+      return sendSuccess(res, { message: 'Request re-opened', request: updated });
     }
 
     if (existing.status === 'accepted') {
-      return res.status(400).json({ error: 'Chat already accepted' });
+      return sendError(res, 'Chat already accepted', 400);
     }
 
     if (existing.status === 'pending') {
@@ -91,12 +92,12 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
           .set({ status: 'accepted', updatedAt: new Date() })
           .where(eq(chatRequests.id, existing.id))
           .returning();
-        return res.status(200).json({
+        return sendSuccess(res, {
           message: 'Mutual request found, chat automatically accepted',
           request: updated,
         });
       }
-      return res.status(400).json({ error: 'Request already pending' });
+      return sendError(res, 'Request already pending', 400);
     }
 
     const [updated] = await db
@@ -110,7 +111,7 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
       })
       .where(eq(chatRequests.id, existing.id))
       .returning();
-    return res.status(200).json({ request: updated });
+    return sendSuccess(res, { request: updated });
   }
 
   const [newRequest] = await db
@@ -122,7 +123,7 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
     })
     .returning();
 
-  return res.status(201).json({ request: newRequest });
+  return sendSuccess(res, { request: newRequest }, 201);
 });
 
 export const respondToRequest = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -133,21 +134,21 @@ export const respondToRequest = asyncHandler(async (req: AuthRequest, res: Respo
   const authenticatedUserId = getAuthenticatedUserId(req);
 
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
 
   if (!status || !['accepted', 'rejected'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid status' });
+    return sendError(res, 'Invalid status', 400);
   }
 
   const db = getDb();
   const chatReq = await db.query.chatRequests.findFirst({
     where: eq(chatRequests.id, String(requestId)),
   });
-  if (!chatReq) return res.status(404).json({ error: 'Request not found' });
+  if (!chatReq) return sendError(res, 'Request not found', 404);
 
   if (chatReq.toUserId !== authenticatedUserId) {
-    return res.status(403).json({ error: 'Forbidden: only the request recipient can respond' });
+    return sendError(res, 'Forbidden: only the request recipient can respond', 403);
   }
 
   const [updated] = await db
@@ -156,13 +157,13 @@ export const respondToRequest = asyncHandler(async (req: AuthRequest, res: Respo
     .where(eq(chatRequests.id, chatReq.id))
     .returning();
 
-  return res.status(200).json({ request: updated });
+  return sendSuccess(res, { request: updated });
 });
 
 export const getRequests = asyncHandler(async (req: AuthRequest, res: Response) => {
   const authenticatedUserId = getAuthenticatedUserId(req);
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
 
   const db = getDb();
@@ -200,7 +201,7 @@ export const getRequests = asyncHandler(async (req: AuthRequest, res: Response) 
     .filter((r) => r.status === 'accepted')
     .map(hydrate);
 
-  return res.status(200).json({ incoming, outgoing, contacts });
+  return sendSuccess(res, { incoming, outgoing, contacts });
 });
 
 export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -208,18 +209,18 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
   const authenticatedUserId = getAuthenticatedUserId(req);
 
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
 
   if (!roomId || !isParticipantRoomId(roomId, authenticatedUserId)) {
-    return res.status(400).json({ error: 'Invalid Room ID' });
+    return sendError(res, 'Invalid Room ID', 400);
   }
 
   const db = getDb();
   const parts = roomId.split('_');
   const otherId = parts.find((p) => p !== authenticatedUserId);
   if (!otherId) {
-    return res.status(400).json({ error: 'Invalid Room ID' });
+    return sendError(res, 'Invalid Room ID', 400);
   }
 
   const connection = await db.query.chatRequests.findFirst({
@@ -239,7 +240,7 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
   });
 
   if (!connection || isHiddenBy(connection.hiddenBy, authenticatedUserId)) {
-    return res.status(403).json({ error: 'Forbidden: no accepted connection for this room' });
+    return sendError(res, 'Forbidden: no accepted connection for this room', 403);
   }
 
   await db
@@ -287,7 +288,7 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
     deliveryState: msg.read ? 'read' : msg.deliveredAt ? 'delivered' : 'sent',
   }));
 
-  return res.status(200).json({
+  return sendSuccess(res, {
     messages: formattedMessages,
     totalCount: Number(totalCount),
     page: pageNum,
@@ -314,21 +315,21 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
 
   const authenticatedUserId = getAuthenticatedUserId(req);
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return sendError(res, 'Unauthorized', 401);
   }
 
   if (senderId && String(senderId) !== authenticatedUserId) {
-    return res.status(403).json({ error: 'Forbidden: sender does not match authenticated session' });
+    return sendError(res, 'Forbidden: sender does not match authenticated session', 403);
   }
 
   const recipientLookup = recipientUserId || req.body.recipientPublicKey;
   if (!recipientLookup) {
-    return res.status(400).json({ error: 'recipientUserId is required' });
+    return sendError(res, 'recipientUserId is required', 400);
   }
 
   const bodyText = content || encryptedContent;
   if (!bodyText) {
-    return res.status(400).json({ error: 'content is required' });
+    return sendError(res, 'content is required', 400);
   }
 
   const db = getDb();
@@ -339,7 +340,7 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
     }));
 
   if (!recipient) {
-    return res.status(404).json({ error: 'Recipient not found' });
+    return sendError(res, 'Recipient not found', 404);
   }
 
   const request = await db.query.chatRequests.findFirst({
@@ -359,7 +360,7 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
   });
 
   if (!request) {
-    return res.status(403).json({ error: 'No accepted connection between these users' });
+    return sendError(res, 'No accepted connection between these users', 403);
   }
 
   const roomId = getRoomId(authenticatedUserId, recipient.id);
@@ -375,41 +376,41 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
     })
     .returning();
 
-  return res.status(202).json({
+  return sendSuccess(res, {
     roomId,
     messageId: newMessage.id,
     message: 'Message persisted to database.',
-  });
+  }, 202);
 });
 
 export const removeRequest = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { requestId } = req.params;
   const authenticatedUserId = getAuthenticatedUserId(req);
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
 
   const db = getDb();
   const chatReq = await db.query.chatRequests.findFirst({
     where: eq(chatRequests.id, requestId),
   });
-  if (!chatReq) return res.status(404).json({ error: 'Request not found' });
+  if (!chatReq) return sendError(res, 'Request not found', 404);
 
   if (
     chatReq.fromUserId !== authenticatedUserId &&
     chatReq.toUserId !== authenticatedUserId
   ) {
-    return res.status(403).json({ error: 'Forbidden: you are not part of this request' });
+    return sendError(res, 'Forbidden: you are not part of this request', 403);
   }
 
   await db.delete(chatRequests).where(eq(chatRequests.id, requestId));
-  return res.status(200).json({ message: 'Connection removed successfully' });
+  return sendSuccess(res, { message: 'Connection removed successfully' });
 });
 
 export const getUnreadMessageCounts = asyncHandler(async (req: AuthRequest, res: Response) => {
   const authenticatedUserId = getAuthenticatedUserId(req);
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
 
   const db = getDb();
@@ -427,7 +428,7 @@ export const getUnreadMessageCounts = asyncHandler(async (req: AuthRequest, res:
     );
 
   if (accepted.length === 0) {
-    return res.status(200).json({});
+    return sendSuccess(res, {});
   }
 
   const roomConditions = accepted.map((r) => {
@@ -460,7 +461,7 @@ export const getUnreadMessageCounts = asyncHandler(async (req: AuthRequest, res:
     if (count > 0) unreadCounts[rc.otherId] = count;
   }
 
-  return res.status(200).json(unreadCounts);
+  return sendSuccess(res, unreadCounts);
 });
 
 export const updateContactName = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -471,10 +472,10 @@ export const updateContactName = asyncHandler(async (req: AuthRequest, res: Resp
   const authenticatedUserId = getAuthenticatedUserId(req);
 
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
   if (!contactUserId) {
-    return res.status(400).json({ error: 'Contact user ID is required' });
+    return sendError(res, 'Contact user ID is required', 400);
   }
 
   const db = getDb();
@@ -495,7 +496,7 @@ export const updateContactName = asyncHandler(async (req: AuthRequest, res: Resp
   });
 
   if (!chatReq) {
-    return res.status(404).json({ error: 'Connection not found' });
+    return sendError(res, 'Connection not found', 404);
   }
 
   const patch =
@@ -508,7 +509,7 @@ export const updateContactName = asyncHandler(async (req: AuthRequest, res: Resp
     .set({ ...patch, updatedAt: new Date() })
     .where(eq(chatRequests.id, chatReq.id));
 
-  return res.status(200).json({ message: 'Contact name updated successfully', customName });
+  return sendSuccess(res, { message: 'Contact name updated successfully', customName });
 });
 
 export const disconnectChat = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -516,10 +517,10 @@ export const disconnectChat = asyncHandler(async (req: AuthRequest, res: Respons
   const authenticatedUserId = getAuthenticatedUserId(req);
 
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
   if (!contactUserId) {
-    return res.status(400).json({ error: 'Contact user ID is required' });
+    return sendError(res, 'Contact user ID is required', 400);
   }
 
   const db = getDb();
@@ -537,7 +538,7 @@ export const disconnectChat = asyncHandler(async (req: AuthRequest, res: Respons
   });
 
   if (!chatReq) {
-    return res.status(404).json({ error: 'Connection not found' });
+    return sendError(res, 'Connection not found', 404);
   }
 
   const hiddenBy = new Set(chatReq.hiddenBy ?? []);
@@ -548,13 +549,13 @@ export const disconnectChat = asyncHandler(async (req: AuthRequest, res: Respons
     .set({ hiddenBy: Array.from(hiddenBy), updatedAt: new Date() })
     .where(eq(chatRequests.id, chatReq.id));
 
-  return res.status(200).json({ message: 'Disconnected successfully' });
+  return sendSuccess(res, { message: 'Disconnected successfully' });
 });
 
 export const createInvite = asyncHandler(async (req: AuthRequest, res: Response) => {
   const authenticatedUserId = getAuthenticatedUserId(req);
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return sendError(res, 'Unauthorized', 401);
   }
 
   const token = crypto.randomBytes(16).toString('hex');
@@ -570,7 +571,7 @@ export const createInvite = asyncHandler(async (req: AuthRequest, res: Response)
     })
     .returning();
 
-  return res.status(201).json({ invite });
+  return sendSuccess(res, { invite }, 201);
 });
 
 export const acceptInvite = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -578,10 +579,10 @@ export const acceptInvite = asyncHandler(async (req: AuthRequest, res: Response)
   const { token } = req.body as { token?: string };
 
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return sendError(res, 'Unauthorized', 401);
   }
   if (!token) {
-    return res.status(400).json({ error: 'token required' });
+    return sendError(res, 'token required', 400);
   }
 
   const db = getDb();
@@ -590,13 +591,13 @@ export const acceptInvite = asyncHandler(async (req: AuthRequest, res: Response)
   });
 
   if (!invite) {
-    return res.status(404).json({ error: 'Invite not found' });
+    return sendError(res, 'Invite not found', 404);
   }
   if (invite.expiresAt && invite.expiresAt < new Date()) {
-    return res.status(410).json({ error: 'Invite expired' });
+    return sendError(res, 'Invite expired', 410);
   }
   if (invite.createdById === authenticatedUserId) {
-    return res.status(400).json({ error: 'Cannot accept your own invite' });
+    return sendError(res, 'Cannot accept your own invite', 400);
   }
 
   const existing = await db.query.chatRequests.findFirst({
@@ -638,7 +639,7 @@ export const acceptInvite = asyncHandler(async (req: AuthRequest, res: Response)
     .where(eq(invites.id, invite.id));
 
   const roomId = getRoomId(invite.createdById, authenticatedUserId);
-  return res.status(200).json({ request, roomId, otherUserId: invite.createdById });
+  return sendSuccess(res, { request, roomId, otherUserId: invite.createdById });
 });
 
 let onlineSocketsByUserIdRef: Map<string, Set<string>>;
@@ -652,9 +653,9 @@ export const getOnlineStatus = asyncHandler(async (req: AuthRequest, res: Respon
   const authenticatedUserId = getAuthenticatedUserId(req);
 
   if (!authenticatedUserId) {
-    return res.status(401).json({ error: 'Unauthorized: No active session' });
+    return sendError(res, 'Unauthorized: No active session', 401);
   }
 
   const isOnline = (onlineSocketsByUserIdRef?.get(userId)?.size ?? 0) > 0;
-  return res.status(200).json({ userId, online: !!isOnline });
+  return sendSuccess(res, { userId, online: !!isOnline });
 });

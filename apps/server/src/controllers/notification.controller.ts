@@ -4,13 +4,14 @@ import { users, chatRequests } from '@connext/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { getDb } from '../lib/constants';
 import { asyncHandler } from '../lib/asyncHandler';
+import { sendSuccess, sendError } from '../lib/response';
 
 export const sendPushNotification = asyncHandler(async (req: any, res: Response) => {
   const { userId, title, body } = req.body as { userId?: string; title?: string; body?: string };
   const senderUserId = req.user?.id;
 
   if (!senderUserId || !userId || !title || !body) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    return sendError(res, 'Missing required fields', 400);
   }
 
   const db = getDb();
@@ -19,7 +20,7 @@ export const sendPushNotification = asyncHandler(async (req: any, res: Response)
   });
 
   if (!recipient?.fcmToken) {
-    return res.status(400).json({ error: 'Recipient has no FCM token' });
+    return sendError(res, 'Recipient has no FCM token', 400);
   }
 
   const connection = await db.query.chatRequests.findFirst({
@@ -33,7 +34,7 @@ export const sendPushNotification = asyncHandler(async (req: any, res: Response)
   });
 
   if (!connection) {
-    return res.status(403).json({ error: 'No accepted chat connection between these users' });
+    return sendError(res, 'No accepted chat connection between these users', 403);
   }
 
   const admin = await import('firebase-admin');
@@ -43,5 +44,5 @@ export const sendPushNotification = asyncHandler(async (req: any, res: Response)
     data: { senderUserId },
   });
 
-  return res.status(200).json({ ok: true });
+  return sendSuccess(res, { ok: true });
 });

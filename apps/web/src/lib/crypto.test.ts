@@ -81,4 +81,35 @@ describe('crypto module', () => {
     const { getStoredPublicKey } = await import('./crypto');
     expect(getStoredPublicKey()).toBeNull();
   });
+
+  it('hasKeys returns false when no keys stored', async () => {
+    const { hasKeys } = await import('./crypto');
+    expect(hasKeys()).toBe(false);
+  });
+
+  it('hasKeys returns true after storing keys', async () => {
+    const { hasKeys, storeKeyPair } = await import('./crypto');
+    const { generateKeyPair } = await import('./crypto');
+    const { publicKey, privateKey } = await generateKeyPair();
+    storeKeyPair(publicKey, privateKey);
+    expect(hasKeys()).toBe(true);
+  });
+
+  it('ensureKeys returns existing key without uploading', async () => {
+    const { ensureKeys, storeKeyPair } = await import('./crypto');
+    const { generateKeyPair } = await import('./crypto');
+    const { publicKey, privateKey } = await generateKeyPair();
+    storeKeyPair(publicKey, privateKey);
+    const result = await ensureKeys('http://localhost:4001');
+    expect(result).toBe(publicKey);
+  });
+
+  it('ensureKeys generates keys when none exist', async () => {
+    storage.clear();
+    const { ensureKeys, hasKeys } = await import('./crypto');
+    expect(hasKeys()).toBe(false);
+    const result = await ensureKeys('http://localhost:4001');
+    expect(result).toBeTruthy();
+    expect(typeof result).toBe('string');
+  });
 });

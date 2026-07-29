@@ -43,12 +43,37 @@ export function getStoredPublicKey(): string | null {
   }
 }
 
-function getStoredPrivateKey(): string | null {
+export function getStoredPrivateKey(): string | null {
   try {
     return localStorage.getItem(PRIVATE_KEY_STORAGE_KEY);
   } catch {
     return null;
   }
+}
+
+export function hasKeys(): boolean {
+  return !!(getStoredPublicKey() && getStoredPrivateKey());
+}
+
+export async function ensureKeys(serverUrl: string): Promise<string> {
+  const existing = getStoredPublicKey();
+  if (existing) return existing;
+
+  const { publicKey, privateKey } = await generateKeyPair();
+  storeKeyPair(publicKey, privateKey);
+
+  try {
+    await fetch(`${serverUrl}/auth/public-key`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publicKey }),
+    });
+  } catch {
+    // non-blocking: keys are stored locally, upload can retry later
+  }
+
+  return publicKey;
 }
 
 export async function encryptMessage(peerPublicKeyBase64: string, plaintext: string): Promise<string> {

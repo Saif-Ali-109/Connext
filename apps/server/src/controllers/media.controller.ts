@@ -7,6 +7,7 @@ import { getR2Client, R2_BUCKET, isR2Configured } from '../lib/r2';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { getDb } from '../lib/constants';
 import { asyncHandler } from '../lib/asyncHandler';
+import { sendSuccess, sendError } from '../lib/response';
 
 const MAX_FILE_BYTES = Number(process.env.MAX_MEDIA_FILE_BYTES || 25 * 1024 * 1024);
 const DEFAULT_SIGNED_URL_SECONDS = Number(process.env.R2_SIGNED_URL_TTL_SECONDS || 300);
@@ -18,21 +19,21 @@ export function buildObjectKey(userId: string, originalName: string) {
 
 export const signUploadUrl = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!isR2Configured()) {
-    return res.status(500).json({ error: 'R2 is not configured' });
+    return sendError(res, 'R2 is not configured', 500);
   }
 
   const authUserId = req.user?.id;
   const { fileName, contentType, size } = req.body;
   if (!authUserId || !fileName || !contentType || !size) {
-    return res.status(400).json({ error: 'Authenticated user, fileName, contentType, and size are required' });
+    return sendError(res, 'Authenticated user, fileName, contentType, and size are required', 400);
   }
 
   const numericSize = Number(size);
   if (!Number.isFinite(numericSize) || numericSize <= 0) {
-    return res.status(400).json({ error: 'Invalid file size' });
+    return sendError(res, 'Invalid file size', 400);
   }
   if (numericSize > MAX_FILE_BYTES) {
-    return res.status(413).json({ error: `File too large. Max allowed is ${MAX_FILE_BYTES} bytes` });
+    return sendError(res, `File too large. Max allowed is ${MAX_FILE_BYTES} bytes`, 413);
   }
 
   const objectKey = buildObjectKey(String(authUserId), String(fileName));
@@ -45,7 +46,7 @@ export const signUploadUrl = asyncHandler(async (req: AuthRequest, res: Response
   });
 
   const uploadUrl = await getSignedUrl(client, command, { expiresIn: DEFAULT_SIGNED_URL_SECONDS });
-  return res.status(200).json({
+  return sendSuccess(res, {
     objectKey,
     uploadUrl,
     expiresIn: DEFAULT_SIGNED_URL_SECONDS,
@@ -55,21 +56,21 @@ export const signUploadUrl = asyncHandler(async (req: AuthRequest, res: Response
 
 export const signDownloadUrl = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!isR2Configured()) {
-    return res.status(500).json({ error: 'R2 is not configured' });
+    return sendError(res, 'R2 is not configured', 500);
   }
   const { objectKey } = req.body;
   if (!objectKey || typeof objectKey !== 'string') {
-    return res.status(400).json({ error: 'objectKey is required' });
+    return sendError(res, 'objectKey is required', 400);
   }
 
   const authUserId = req.user?.id;
   if (!authUserId) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return sendError(res, 'Unauthorized', 401);
   }
 
   const parts = objectKey.split('/');
   if (parts.length < 3 || parts[0] !== 'chat-media') {
-    return res.status(400).json({ error: 'Invalid object key format' });
+    return sendError(res, 'Invalid object key format', 400);
   }
   const uploaderUserId = parts[1];
 
@@ -92,7 +93,7 @@ export const signDownloadUrl = asyncHandler(async (req: AuthRequest, res: Respon
     });
 
     if (!hasConnection) {
-      return res.status(403).json({ error: 'Forbidden: You do not have an active chat with the uploader of this file' });
+      return sendError(res, 'Forbidden: You do not have an active chat with the uploader of this file', 403);
     }
   }
 
@@ -103,7 +104,7 @@ export const signDownloadUrl = asyncHandler(async (req: AuthRequest, res: Respon
   });
   const downloadUrl = await getSignedUrl(client, command, { expiresIn: DEFAULT_SIGNED_URL_SECONDS });
 
-  return res.status(200).json({
+  return sendSuccess(res, {
     objectKey,
     downloadUrl,
     expiresIn: DEFAULT_SIGNED_URL_SECONDS,
@@ -112,17 +113,17 @@ export const signDownloadUrl = asyncHandler(async (req: AuthRequest, res: Respon
 
 export const proxyUpload = asyncHandler(async (req: AuthRequest, res: Response) => {
   if (!isR2Configured()) {
-    return res.status(500).json({ error: 'R2 is not configured' });
+    return sendError(res, 'R2 is not configured', 500);
   }
 
   const authUserId = req.user?.id;
   if (!authUserId) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return sendError(res, 'Unauthorized', 401);
   }
 
   const file = req.file;
   if (!file) {
-    return res.status(400).json({ error: 'No file uploaded' });
+    return sendError(res, 'No file uploaded', 400);
   }
 
   const objectKey = buildObjectKey(String(authUserId), file.originalname);
@@ -135,7 +136,7 @@ export const proxyUpload = asyncHandler(async (req: AuthRequest, res: Response) 
     Body: file.buffer,
   }));
 
-  return res.status(200).json({
+  return sendSuccess(res, {
     objectKey,
     message: 'File uploaded successfully through proxy',
   });

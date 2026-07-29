@@ -9,7 +9,7 @@ import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
 import { otherUserIdFromRoom } from '../../lib/roomId';
 import { getApiBaseUrl } from '../../lib/api';
-import { encryptMessage, decryptMessage, decryptWithKey, getStoredPublicKey } from '../../lib/crypto';
+import { encryptMessage, decryptMessage, ensureKeys } from '../../lib/crypto';
 import Navigation from '../../components/Navigation';
 import { Spinner } from '../../components/ui/motion';
 
@@ -168,9 +168,11 @@ export default function ChatClient() {
     }
   }, [otherUserId]);
 
-  // Load own public key from storage
+  // Ensure current user has E2EE keys; generate + upload if missing
   useEffect(() => {
-    ownPublicKeyRef.current = getStoredPublicKey();
+    ensureKeys(SERVER_URL).then((pk) => {
+      ownPublicKeyRef.current = pk;
+    });
   }, []);
 
   useEffect(() => {
@@ -282,10 +284,6 @@ export default function ChatClient() {
   const send = async () => {
     const text = draft.trim();
     if (!text || !userId || !otherUserId || sending) return;
-    if (!peerPublicKey) {
-      alert('Cannot send: peer public key not available');
-      return;
-    }
     setSending(true);
     setDraft('');
 
@@ -295,19 +293,21 @@ export default function ChatClient() {
       { id: tempId, key: tempId, sender: 'me', text, createdAt: new Date().toISOString(), status: 'sending' },
     ]);
 
-    let encryptedContent: string;
+    let encryptedContent: string | undefined;
     let encryptedContentForSender: string | undefined;
-    try {
-      encryptedContent = await encryptMessage(peerPublicKey, text);
-      if (ownPublicKeyRef.current) {
-        encryptedContentForSender = await encryptMessage(ownPublicKeyRef.current, text);
+    if (peerPublicKey) {
+      try {
+        encryptedContent = await encryptMessage(peerPublicKey, text);
+        if (ownPublicKeyRef.current) {
+          encryptedContentForSender = await encryptMessage(ownPublicKeyRef.current, text);
+        }
+      } catch {
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        setDraft(text);
+        alert('Encryption failed');
+        setSending(false);
+        return;
       }
-    } catch {
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      setDraft(text);
-      alert('Encryption failed');
-      setSending(false);
-      return;
     }
 
     try {
@@ -319,7 +319,7 @@ export default function ChatClient() {
             {
               messageId: tempId,
               recipientUserId: otherUserId,
-              content: undefined,
+              content: encryptedContent ? undefined : text,
               encryptedContent,
               encryptedContentForSender,
             },
@@ -349,6 +349,7 @@ export default function ChatClient() {
           body: JSON.stringify({
             senderId: userId,
             recipientUserId: otherUserId,
+            content: encryptedContent ? undefined : text,
             encryptedContent,
             encryptedContentForSender,
           }),
