@@ -45,7 +45,7 @@
         "socket.io-client": "^4.8.3",
         "ts-node": "^10.9.1",
         "tsconfig-paths": "^4.2.0",
-        "typescript": "^5.4.5",
+        "typescript": "^6.0.0",
         "vitest": "^4.1.10"
     }
 }

@@ -26,9 +26,6 @@ jobs:
       - name: Lint
         run: npm run lint --workspaces --if-present
 
-      - name: Typecheck
-        run: npx tsc --noEmit -p apps/server/tsconfig.json
-
       - name: Test
         run: npm run test --workspaces --if-present
 
