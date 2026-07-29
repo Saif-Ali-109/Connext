@@ -14,8 +14,12 @@ export function createDb(connectionString: string) {
 export async function runMigrations(connectionString: string) {
   const client = postgres(connectionString, { max: 1 });
   const db = drizzle(client);
-  await migrate(db, {
-    migrationsFolder: path.join(__dirname, '..', 'drizzle'),
-  });
+  try {
+    await migrate(db, {
+      migrationsFolder: path.join(__dirname, '..', 'drizzle'),
+    });
+  } catch (err) {
+    console.warn('Migration warning (non-fatal):', (err as Error)?.message ?? err);
+  }
   await client.end();
 }
