@@ -64,14 +64,13 @@ Connext is a real-time, one-to-one chat application with flexible authentication
                └──────────────────┘  └──────────────────┘
 ```
 
-The monorepo follows npm workspaces with four packages:
+The monorepo follows npm workspaces with three packages:
 
 | Workspace | Role | Entry Point |
 |-----------|------|-------------|
-| `apps/web` | Frontend + NextAuth | `next dev` on port 3000 |
-| `apps/server` | Express API + Socket.IO | `ts-node src/index.ts` on port 4001 |
+| `apps/web` | Frontend + NextAuth | `next dev --turbo` on port 3000 |
+| `apps/server` | Express API + Socket.IO | `nodemon --exec ts-node src/index.ts` on port 4001 |
 | `packages/db` | Database schema + utilities | consumed as `@connext/db` |
-| `packages/types` | Shared TypeScript interfaces | consumed as `@connext/types` |
 
 Authentication flows through a **two-layer session architecture**: NextAuth handles initial login (credentials, Google, email code) and issues a JWT session. A bridge mechanism passes the session to Express, which issues its own httpOnly JWT cookie for REST and Socket.IO access.
 
@@ -94,6 +93,8 @@ Authentication flows through a **two-layer session architecture**: NextAuth hand
 | postgres | 3.4.7 | PostgreSQL driver |
 | clsx | 2.1.1 | Conditional class names |
 | tailwind-merge | 3.5.0 | Tailwind class deduplication |
+| nodemailer | 7.0.5 | SMTP/email sending (Brevo API) |
+| preact | 10.29.7 | React replacement for NextAuth |
 
 ### apps/server
 | Dependency | Version | Purpose |
@@ -113,6 +114,8 @@ Authentication flows through a **two-layer session architecture**: NextAuth hand
 | cookie-parser | 1.4.7 | Cookie parsing |
 | dotenv | 16.6.1 | Environment variable loading |
 | uuid | 13.0.0 | UUID generation |
+| pino | 10.3.1 | Structured JSON logging |
+| pino-http | 11.0.0 | HTTP request logging via pino |
 
 ### packages/db
 | Dependency | Version | Purpose |
@@ -120,7 +123,7 @@ Authentication flows through a **two-layer session architecture**: NextAuth hand
 | drizzle-orm | 0.44.2 | Type-safe ORM |
 | drizzle-kit | 0.31.4 | Migration tooling |
 | postgres | 3.4.7 | PostgreSQL driver |
-| crypto | (built-in) | scrypt password hashing |
+| crypto | (built-in) | scrypt password hashing + HMAC bridge |
 
 ---
 
@@ -145,7 +148,7 @@ connext/
 │   │       │   │       └── signup/route.ts
 │   │       │   ├── login/page.tsx          # Login/signup (3 tabs: password, email, anon)
 │   │       │   ├── login/verify/page.tsx
-│   │       │   ├── dashboard/page.tsx      # Contact list + unread badges
+│   │       │   ├── dashboard/              # Contact list, profile, requests, security, sidebar
 │   │       │   ├── chat/
 │   │       │   │   ├── layout.tsx
 │   │       │   │   ├── page.tsx
@@ -169,11 +172,11 @@ connext/
 │   │       ├── lib/
 │   │       │   ├── api.ts                  # Server URL + headers
 │   │       │   ├── clipboard.ts            # Copy utility
+│   │       │   ├── crypto.ts               # E2EE key generation & encryption
 │   │       │   ├── localChatStore.ts       # localStorage message cache
 │   │       │   ├── media.ts               # Upload/download helpers
 │   │       │   ├── roomId.ts              # Room ID utilities
-│   │       │   ├── storage.ts             # Auth cache wrappers
-│   │       │   └── walletLinks.ts         # Legacy wallet deep links
+│   │       │   └── storage.ts             # Auth cache wrappers
 │   │       ├── styles/globals.css         # Tailwind 4 + theme variables
 │   │       ├── types/
 │   │       │   ├── css.d.ts
@@ -192,25 +195,45 @@ connext/
 │           │   ├── chat.controller.ts
 │           │   ├── media.controller.ts
 │           │   └── notification.controller.ts
+│           ├── socket/
+│           │   ├── index.ts               # Socket.IO deps + emitToContacts helper
+│           │   ├── messaging.ts            # send_message, message_delivered, message_read
+│           │   ├── presence.ts             # user_online / user_offline
+│           │   ├── rooms.ts               # join_room resolution
+│           │   ├── typing.ts              # typing_start / typing_stop
+│           │   └── types.ts               # SocketDeps interface
 │           ├── middleware/
 │           │   ├── auth.middleware.ts      # JWT cookie verification
-│           │   └── rateLimiter.ts          # IP-based rate limiter
-│           └── lib/
-│               ├── bridge.ts              # HMAC signature + verify
-│               ├── constants.ts           # Env vars + DB singleton
-│               ├── env.ts                 # Env reader with defaults
-│               ├── fcm.ts                 # Firebase Admin SDK
-│               └── r2.ts                  # Cloudflare R2 client
+│           │   ├── errorHandler.ts        # Global error handler
+│           │   └── rateLimiter.ts          # IP-based + media upload rate limiter
+│           ├── lib/
+│           │   ├── asyncHandler.ts         # Async route wrapper
+│           │   ├── bridge.ts              # HMAC signature + verify
+│           │   ├── constants.ts           # Env vars + DB singleton
+│           │   ├── email.ts               # Brevo API email sender
+│           │   ├── env.ts                 # Env reader with defaults
+│           │   ├── fcm.ts                 # Firebase Admin SDK
+│           │   ├── logger.ts              # Pino logger setup
+│           │   ├── r2.ts                  # Cloudflare R2 client
+│           │   ├── response.ts            # sendSuccess / sendError helpers
+│           │   └── user.ts               # User query helpers
+│           ├── scripts/
+│           │   └── setup-r2-cors.ts       # R2 CORS configuration script
+│           └── __tests__/
+│               ├── auth.controller.test.ts
+│               ├── auth.middleware.test.ts
+│               ├── bridge.test.ts
+│               ├── chat.controller.test.ts
+│               ├── media.controller.test.ts
+│               └── socket.integration.test.ts
 ├── packages/
-│   ├── db/
-│   │   ├── drizzle.config.ts
-│   │   └── src/
-│   │       ├── index.ts                   # Public API
-│   │       ├── schema.ts                  # All table definitions
-│   │       ├── client.ts                  # Drizzle client factory
-│   │       └── password.ts               # scrypt hash + verify
-│   └── types/
-│       └── index.ts                       # Shared interfaces
+│   └── db/
+│       ├── drizzle.config.ts
+│       └── src/
+│           ├── index.ts                   # Public API
+│           ├── schema.ts                  # All table definitions
+│           ├── client.ts                  # Drizzle client factory
+│           └── password.ts               # scrypt hash + verify
 ```
 
 ---
@@ -340,6 +363,7 @@ Core identity table, shared with Auth.js adapter.
 | `displayName` | `text` | nullable | Custom display name override |
 | `avatarUrl` | `text` | nullable | Custom avatar URL override |
 | `fcmToken` | `text` | nullable | Firebase Cloud Messaging token |
+| `publicKey` | `text` | nullable | E2EE public key (base64) |
 | `lastSeenAt` | `timestamp` | default `now()` | Updated on bridge session |
 | `createdAt` | `timestamp` | not null, default `now()` | |
 | `updatedAt` | `timestamp` | not null, default `now()` | |
@@ -383,16 +407,31 @@ Auth.js adapter table for email verification codes and tokens.
 
 Composite PK: `(identifier, token)`
 
+### verification_code
+Custom table for email verification codes (separate from Auth.js adapter tokens).
+
+| Column | Type | Constraints | Default |
+|--------|------|-------------|---------|
+| `id` | `text` | PK, UUID | `randomUUID()` |
+| `userId` | `text` | not null, FK → users.id ON DELETE CASCADE | |
+| `email` | `text` | not null | |
+| `code` | `text` | not null | 6-digit code |
+| `type` | `text` | not null | `'email_verification'` or `'email_change'` |
+| `expiresAt` | `timestamp` | not null | |
+| `usedAt` | `timestamp` | nullable | Set when code is consumed |
+| `createdAt` | `timestamp` | not null | `now()` |
+
 ### message
-Chat message history.
+Chat message history. Supports both plaintext (`content`) and E2EE (`encryptedContent`) payloads.
 
 | Column | Type | Constraints | Default |
 |--------|------|-------------|---------|
 | `id` | `text` | PK, UUID | `randomUUID()` |
 | `senderId` | `text` | not null, FK → users.id ON DELETE CASCADE | |
 | `roomId` | `text` | not null | Format: `minID_maxID` |
-| `content` | `text` | nullable | Text content |
-| `media` | `jsonb` | nullable | Array of `{ url, type, name, size }` |
+| `content` | `text` | nullable | Plaintext content |
+| `encryptedContent` | `text` | nullable | E2EE ciphertext for recipient |
+| `encryptedContentForSender` | `text` | nullable | E2EE ciphertext for sender's own history |
 | `read` | `boolean` | not null | `false` |
 | `deliveredAt` | `timestamp` | nullable | Set on delivery acknowledgment |
 | `timestamp` | `timestamp` | not null | `now()` |
@@ -437,7 +476,13 @@ Sliding-window rate limiter for email verification codes.
 | `count` | `integer` | not null | `0` |
 | `windowStart` | `timestamp` | not null | `now()` |
 
-### Relations (`schema.ts:137-166`)
+### Indexes
+- `messages`: indexed on `roomId`, `(roomId, timestamp)`, `senderId`, `(roomId, read)`, and a GIN trigram index on `content` for full-text search
+- `chat_requests`: unique index on `(fromUserId, toUserId)`, index on `status`
+- `accounts`: index on `userId`
+- `sessions`: index on `userId`
+
+### Relations
 - `usersRelations`: has many `accounts`, `sessions`, `messages`
 - `accountsRelations`: belongs to one `user`
 - `sessionsRelations`: belongs to one `user`
@@ -451,6 +496,7 @@ type NewUser         = typeof users.$inferInsert
 type Message         = typeof messages.$inferSelect
 type ChatRequest     = typeof chatRequests.$inferSelect
 type Invite          = typeof invites.$inferSelect
+type VerificationCode = typeof verificationCodes.$inferSelect
 type EmailCodeRateLimit = typeof emailCodeRateLimits.$inferSelect
 ```
 
@@ -610,9 +656,9 @@ Requires both users to be in an accepted connection.
 
 **POST `/notifications/send`** request:
 ```json
-{ "token": "...", "title": "New message", "body": "Hello!", "data": { "type": "message", "roomId": "..." } }
+{ "userId": "...", "title": "New message", "body": "Hello!" }
 ```
-Validates the caller has an accepted connection with the recipient referenced in `data`.
+Validates the caller has an accepted connection with the recipient. Uses the recipient's stored `fcmToken`.
 
 ### Health Check
 
@@ -635,18 +681,19 @@ socket = io(SERVER_URL, { auth: { token: "jwt..." } })
 On connect:
 - Server verifies JWT, extracts `userId`
 - Adds socket to `onlineSocketsByUserId` map
-- Broadcasts `user_online: { userId }` to all connected clients
+- Joins room `user:{userId}` for targeted messaging
+- Emits `user_online: { userId }` to all accepted contacts
 
 On disconnect:
 - Removes socket from tracking
-- If user has no more sockets, broadcasts `user_offline: { userId }`
+- If user has no more sockets, emits `user_offline: { userId }` to all accepted contacts
 
 ### Client → Server Events
 
 | Event | Payload | Behavior |
 |-------|---------|----------|
 | `join_room` | `string \| { roomId, otherIdentifier? }` | Join a Socket.IO room by roomId or resolve from otherIdentifier. Emits `room_joined: { roomId }` on success |
-| `send_message` | `{ messageId, recipientUserId, content? }` | Validates rate limit (500ms cooldown per socket), checks accepted connection, persists to DB. Emits `receive_message` to recipient's rooms and socket channels. Emits `message_delivery_status` to sender |
+| `send_message` | `{ messageId, recipientUserId, recipientPublicKey?, content?, encryptedContent?, encryptedContentForSender? }` | Validates rate limit (500ms cooldown per socket), checks accepted connection, persists to DB. Emits `receive_message` to recipient's rooms and socket channels. Emits `message_delivery_status` to sender. Supports both plaintext and E2EE payloads |
 | `message_delivered` | `{ roomId, messageId }` | Updates `deliveredAt` in DB. Emits `message_delivered_relay: { messageId }` to sender's sockets |
 | `message_read` | `{ roomId, messageId }` | Sets `read = true` in DB. Emits `message_read_relay: { messageId }` to sender's sockets |
 | `typing_start` | `{ roomId }` | Broadcasts `user_typing: { userId, roomId }` to room |
@@ -660,7 +707,7 @@ On disconnect:
 | `user_online` | `{ userId }` | User connected |
 | `user_offline` | `{ userId }` | User disconnected (all sockets gone) |
 | `room_joined` | `{ roomId }` | `join_room` succeeded |
-| `receive_message` | `{ id, sender, roomId, content, createdAt }` | New message from peer |
+| `receive_message` | `{ id, sender, roomId, content, encryptedContent, encryptedContentForSender, createdAt }` | New message from peer |
 | `message_delivery_status` | `{ recipientUserId, messageId, delivered }` | Acknowledgement that recipient received the message |
 | `message_delivered_relay` | `{ messageId }` | Peer confirmed delivery |
 | `message_read_relay` | `{ messageId }` | Peer read the message |
@@ -773,17 +820,17 @@ admin.initializeApp({
 
 ```
 1. Client registers FCM token via POST /auth/fcm-token { fcmToken }
-2. When a message is sent via Socket.IO, server checks if recipient has an fcmToken
-3. If recipient is offline (no active sockets), server sends FCM data notification
-4. Data payload: { type: "message", roomId, senderId, senderName, content }
+2. When a message is sent via Socket.IO, server delivers it in real-time if the recipient is online
+3. To trigger a push notification (e.g. when the recipient is offline), the sender calls POST /notifications/send
+4. The server validates the sender has an accepted connection with the recipient, then sends via Firebase Admin SDK
 ```
 
-Notification format (Android high-priority):
+Notification format:
 ```typescript
 const message = {
   token: recipient.fcmToken,
-  data: { type, roomId, senderId, senderName, content },
-  android: { priority: 'high' },
+  notification: { title, body },
+  data: { senderUserId },
 };
 ```
 
@@ -793,12 +840,13 @@ const message = {
 
 `apps/web/src/components/NotificationManager.tsx` handles browser notifications:
 1. Requests `Notification` permission on mount
-2. Listens for `receive_message` Socket.IO event
-3. Fires `new Notification(title, { body, icon })` if:
+2. Opens a lightweight Socket.IO connection (separate from the chat socket)
+3. Listens for `receive_message` Socket.IO event
+4. Fires `new Notification('New message', { body })` if:
    - Permission granted
-   - App tab is not focused (uses `document.hidden` / `visibilitychange`)
+   - User is not currently viewing a `/chat/` page
    - Message is from another user
-4. Clicking the notification focuses the chat tab
+5. For E2EE messages, the body shows `[Encrypted message]` as content is not decryptable
 
 ---
 
@@ -824,8 +872,8 @@ const message = {
 - `sameSite: 'none'` in production (required for cross-origin cookies)
 
 ### Rate Limiting
-- Per-socket: 500ms message send cooldown
-- Per-IP: 100 requests/minute via `express-rate-limit` + in-memory fallback
+- Per-socket: 500ms message send cooldown (in-memory)
+- REST API: granular per-endpoint limiters via `express-rate-limit` (auth, password change, verification, chat requests, messages, invites, media uploads, and a general 30/min fallback)
 - Email codes: 10 per email per 10-minute sliding window (DB-backed)
 
 ### Media
@@ -903,34 +951,6 @@ export default defineConfig({
 ```
 Run with: `npx drizzle-kit push` or from root: `npm run db:push`
 
-### @connext/types (`packages/types`)
-
-Pure TypeScript interfaces shared between packages:
-
-```typescript
-interface User {
-  id: string;
-  email?: string | null;
-  username?: string | null;
-  displayName?: string | null;
-  avatarUrl?: string | null;
-}
-
-interface Message {
-  id: string;
-  sender: string;
-  content: string;
-  timestamp: number;
-  roomId: string;
-}
-
-interface ChatRoom {
-  id: string;
-  participants: string[];
-  lastMessage?: Message;
-}
-```
-
 ---
 
 ## Development & Deployment
@@ -964,19 +984,25 @@ npm run dev
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Build DB package, run web + server concurrently |
-| `npm run dev:web` | Next.js dev server only |
-| `npm run dev:server` | Express dev server only (with nodemon) |
+| `npm run dev:web` | Build DB package, then Next.js dev server only |
+| `npm run dev:server` | Build DB package, then Express dev server (with nodemon) |
 | `npm run db:push` | Push Drizzle schema to PostgreSQL |
+| `npm run db:migrate` | Run Drizzle migrations |
 | `npm run build` | Build all workspaces for production |
+| `npm run start` | Run production build (web + server concurrently) |
 | `npm run lint` | ESLint across workspaces |
+| `npm run test` | Run all workspace tests |
 
 ### Docker
 
-Both `apps/web` and `apps/server` have Dockerfiles for production builds. The web Dockerfile builds the Next.js standalone output; the server Dockerfile compiles TypeScript.
+Both `apps/web` and `apps/server` have multi-stage Dockerfiles for production builds (Node 20 Alpine):
+
+- **web**: Builds `@connext/db` first, then `connext-web` (Next.js standalone output). The `NEXT_PUBLIC_SERVER_URL` build arg must be provided at build time. Runs on port 3000.
+- **server**: Builds `@connext/db` first, then `@connext/server` (TypeScript compiled via `tsc`). Runs on port 4001.
 
 ### Production Notes
 
-- Next.js standalone output requires the `@connext/db` and `@connext/types` workspace packages to be built first
+- Next.js standalone output requires the `@connext/db` workspace package to be built first
 - Express server should be run behind a reverse proxy (nginx, Caddy) for production
 - WebSocket connections require the proxy to support WebSocket upgrade headers
 - PostgreSQL connection pooling (max 10 connections via `postgres` driver)

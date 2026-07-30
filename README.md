@@ -42,7 +42,6 @@ Connext is a real-time, one-to-one messaging application built with Next.js, Exp
 | `apps/web` | Frontend Web Client & NextAuth UI | Next.js 15, React 19, Tailwind CSS, Socket.IO Client |
 | `apps/server` | Backend REST API & Socket.IO Server | Express, Socket.IO 4, JWT, Helmet |
 | `packages/db` | Database Schema & Client | PostgreSQL, Drizzle ORM |
-| `packages/types` | Shared TypeScript interfaces | TypeScript |
 
 ## Getting Started
 
@@ -91,12 +90,15 @@ Connext is a real-time, one-to-one messaging application built with Next.js, Exp
 ## Available Commands
 
 ```bash
-npm run dev          # Runs database build, then web + server concurrently
-npm run dev:web      # Runs Next.js web frontend
-npm run dev:server   # Runs Express API & Socket.IO backend
-npm run db:push      # Applies Drizzle schema to PostgreSQL
+npm run dev          # Builds DB package, then runs web + server concurrently
+npm run dev:web      # Builds DB package, then runs Next.js web frontend
+npm run dev:server   # Builds DB package, then runs Express API & Socket.IO backend
 npm run build        # Builds all workspaces for production
+npm run start        # Runs production build (web + server concurrently)
+npm run db:push      # Applies Drizzle schema to PostgreSQL
+npm run db:migrate   # Runs Drizzle migrations
 npm run lint         # Runs ESLint checks across workspaces
+npm run test         # Runs all workspace tests
 ```
 
 ## License
