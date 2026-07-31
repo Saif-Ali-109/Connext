@@ -16,6 +16,21 @@ import { sendSuccess, sendError } from '../lib/response';
 import { publicUser } from '../lib/user';
 import crypto from 'crypto';
 
+const TTL = 30_000;
+const requestCache = new Map<string, { data: unknown; expiresAt: number }>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of requestCache) {
+    if (entry.expiresAt < now) requestCache.delete(key);
+  }
+}, TTL);
+
+function invalidateRequestCache(...userIds: string[]) {
+  for (const id of userIds) {
+    requestCache.delete(id);
+  }
+}
+
 const getAuthenticatedUserId = (req: AuthRequest): string =>
   String(req.user?.id || '');
 
@@ -79,6 +94,7 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
         })
         .where(eq(chatRequests.id, existing.id))
         .returning();
+      invalidateRequestCache(fromUser.id, toUser.id);
       return sendSuccess(res, { message: 'Request re-opened', request: updated });
     }
 
@@ -93,6 +109,7 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
           .set({ status: 'accepted', updatedAt: new Date() })
           .where(eq(chatRequests.id, existing.id))
           .returning();
+        invalidateRequestCache(fromUser.id, toUser.id);
         return sendSuccess(res, {
           message: 'Mutual request found, chat automatically accepted',
           request: updated,
@@ -112,6 +129,7 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
       })
       .where(eq(chatRequests.id, existing.id))
       .returning();
+    invalidateRequestCache(fromUser.id, toUser.id);
     return sendSuccess(res, { request: updated });
   }
 
@@ -124,6 +142,7 @@ export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) 
     })
     .returning();
 
+  invalidateRequestCache(fromUser.id, toUser.id);
   return sendSuccess(res, { request: newRequest }, 201);
 });
 
@@ -158,6 +177,7 @@ export const respondToRequest = asyncHandler(async (req: AuthRequest, res: Respo
     .where(eq(chatRequests.id, chatReq.id))
     .returning();
 
+  invalidateRequestCache(authenticatedUserId, chatReq.fromUserId);
   return sendSuccess(res, { request: updated });
 });
 
@@ -165,6 +185,11 @@ export const getRequests = asyncHandler(async (req: AuthRequest, res: Response) 
   const authenticatedUserId = getAuthenticatedUserId(req);
   if (!authenticatedUserId) {
     return sendError(res, 'Unauthorized: No active session', 401);
+  }
+
+  const cached = requestCache.get(authenticatedUserId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return sendSuccess(res, cached.data as Record<string, unknown>);
   }
 
   const db = getDb();
@@ -202,7 +227,9 @@ export const getRequests = asyncHandler(async (req: AuthRequest, res: Response) 
     .filter((r) => r.status === 'accepted')
     .map(hydrate);
 
-  return sendSuccess(res, { incoming, outgoing, contacts });
+  const data = { incoming, outgoing, contacts };
+  requestCache.set(authenticatedUserId, { data, expiresAt: Date.now() + TTL });
+  return sendSuccess(res, data);
 });
 
 export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -407,6 +434,7 @@ export const removeRequest = asyncHandler(async (req: AuthRequest, res: Response
     return sendError(res, 'Forbidden: you are not part of this request', 403);
   }
 
+  invalidateRequestCache(authenticatedUserId, chatReq.fromUserId, chatReq.toUserId);
   await db.delete(chatRequests).where(eq(chatRequests.id, requestId));
   return sendSuccess(res, { message: 'Connection removed successfully' });
 });
@@ -547,6 +575,8 @@ export const disconnectChat = asyncHandler(async (req: AuthRequest, res: Respons
 
   const hiddenBy = new Set(chatReq.hiddenBy ?? []);
   hiddenBy.add(authenticatedUserId);
+
+  invalidateRequestCache(authenticatedUserId, contactUserId);
 
   await db
     .update(chatRequests)

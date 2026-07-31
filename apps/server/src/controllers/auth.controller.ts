@@ -54,18 +54,32 @@ export const bridgeSession = asyncHandler(async (req: AuthRequest, res: Response
       .returning();
     user = created;
   } else {
-    const [updated] = await db
-      .update(users)
-      .set({
-        email: payload.email ?? user.email,
-        name: payload.name ?? user.name,
-        image: payload.image ?? user.image,
-        updatedAt: new Date(),
-        lastSeenAt: new Date(),
-      })
-      .where(eq(users.id, user.id))
-      .returning();
-    user = updated;
+    const dataChanged =
+      (payload.email ?? null) !== user.email ||
+      (payload.name ?? null) !== user.name ||
+      (payload.image ?? null) !== user.image;
+    const lastSeenStale =
+      !user.lastSeenAt ||
+      Date.now() - user.lastSeenAt.getTime() > 60_000;
+
+    if (dataChanged || lastSeenStale) {
+      const setFields: Record<string, unknown> = {};
+      if (dataChanged) {
+        setFields.email = payload.email ?? user.email;
+        setFields.name = payload.name ?? user.name;
+        setFields.image = payload.image ?? user.image;
+        setFields.updatedAt = new Date();
+      }
+      if (lastSeenStale) {
+        setFields.lastSeenAt = new Date();
+      }
+      const [updated] = await db
+        .update(users)
+        .set(setFields)
+        .where(eq(users.id, user.id))
+        .returning();
+      user = updated;
+    }
   }
 
   setAuthCookie(res, user);

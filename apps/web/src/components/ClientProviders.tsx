@@ -75,6 +75,14 @@ function BridgeSession({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // If already authenticated and on the login page, redirect immediately
+  // without waiting for the bridge flow. This saves 2-5 seconds on redirects.
+  useEffect(() => {
+    if (status === 'authenticated' && pathname === '/login') {
+      router.replace('/dashboard');
+    }
+  }, [status, pathname, router]);
+
   // Establish the Express token cookie via the bridge, then load the server profile.
   useEffect(() => {
     if (status !== 'authenticated' || !session?.user?.id) {
