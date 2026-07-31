@@ -92,6 +92,10 @@ export const messages = pgTable(
     encryptedContent: text('encryptedContent'),
     encryptedContentForSender: text('encryptedContentForSender'),
     read: boolean('read').default(false).notNull(),
+    reaction: text('reaction'),
+    reactedByUserId: text('reactedByUserId').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     deliveredAt: timestamp('deliveredAt', { mode: 'date' }),
     timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
     createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),

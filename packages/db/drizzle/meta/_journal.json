@@ -15,6 +15,13 @@
       "when": 1785343207812,
       "tag": "0001_black_magik",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785473090574,
+      "tag": "0002_complex_jackpot",
+      "breakpoints": true
     }
   ]
 }

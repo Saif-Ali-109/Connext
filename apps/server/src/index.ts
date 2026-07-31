@@ -25,6 +25,7 @@ import {
   registerRoomHandlers,
   registerMessagingHandlers,
   registerTypingHandlers,
+  registerReactionHandlers,
   createSocketDeps,
 } from './socket';
 
@@ -143,6 +144,7 @@ io.on('connection', (socket) => {
   registerRoomHandlers(io, socket, deps);
   registerMessagingHandlers(io, socket, deps);
   registerTypingHandlers(io, socket, deps);
+  registerReactionHandlers(io, socket, deps);
 });
 
 async function startServer() {

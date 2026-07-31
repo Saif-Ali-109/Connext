@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
-import { ArrowLeft, Check, CheckCheck, Loader2, Send } from 'lucide-react';
+import { ArrowLeft, Check, CheckCheck, Loader2, Send, SmilePlus } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
@@ -12,6 +12,7 @@ import { getApiBaseUrl } from '../../lib/api';
 import { encryptMessage, decryptMessage, ensureKeys } from '../../lib/crypto';
 import Navigation from '../../components/Navigation';
 import { Spinner } from '../../components/ui/motion';
+import EmojiPicker from '../../components/ui/EmojiPicker';
 
 const SERVER_URL = getApiBaseUrl();
 
@@ -68,7 +69,10 @@ type ChatMessage = {
   text: string;
   createdAt: string;
   status?: DeliveryState;
+  reaction?: { emoji: string; mine: boolean } | null;
 };
+
+const MAX_MSG_LENGTH = 5000;
 
 export default function ChatClient() {
   const params = useParams();
@@ -84,8 +88,11 @@ export default function ChatClient() {
   const [peerPublicKey, setPeerPublicKey] = useState<string | null>(null);
   const ownPublicKeyRef = useRef<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [composerPickerOpen, setComposerPickerOpen] = useState(false);
+  const [reactingTo, setReactingTo] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const readEmittedRef = useRef<Set<string>>(new Set());
   const messageIdsRef = useRef(new Set<string>());
   const lastProcessedCountRef = useRef(0);
@@ -117,6 +124,8 @@ export default function ChatClient() {
               text: string;
               encryptedContent?: string | null;
               encryptedContentForSender?: string | null;
+              reaction?: string | null;
+              reactedByUserId?: string | null;
               createdAt: string;
               deliveryState?: DeliveryState;
             }) => {
@@ -139,6 +148,9 @@ export default function ChatClient() {
                 text,
                 createdAt: m.createdAt,
                 status: m.sender === 'me' ? m.deliveryState ?? 'sent' : undefined,
+                reaction: m.reaction
+                  ? { emoji: m.reaction, mine: m.reactedByUserId === userId }
+                  : null,
               };
             }
           )
@@ -174,6 +186,90 @@ export default function ChatClient() {
       ownPublicKeyRef.current = pk;
     });
   }, []);
+
+  const applyReaction = useCallback(
+    (messageId: string, emoji: string | null, reactedByUserId: string | null) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                reaction: emoji
+                  ? { emoji, mine: reactedByUserId === userId }
+                  : null,
+              }
+            : m
+        )
+      );
+    },
+    [userId]
+  );
+
+  const reactToMessage = useCallback(
+    async (message: ChatMessage, emoji: string) => {
+      if (!userId) return;
+      try {
+        const socket = socketRef.current;
+        if (socket?.connected) {
+          await new Promise<void>((resolve, reject) => {
+            socket.emit(
+              'react_message',
+              { messageId: message.id, emoji },
+              (ack?: {
+                ok: boolean;
+                error?: string;
+                messageId?: string;
+                emoji?: string | null;
+                userId?: string | null;
+              }) => {
+                if (!ack?.ok) {
+                  reject(new Error(ack?.error || 'Reaction failed'));
+                  return;
+                }
+                if (ack.messageId) {
+                  applyReaction(ack.messageId, ack.emoji ?? null, ack.userId ?? null);
+                }
+                resolve();
+              }
+            );
+          });
+        } else {
+          const res = await fetch(`${SERVER_URL}/chat/react`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messageId: message.id, emoji }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Reaction failed');
+          applyReaction(data.messageId, data.emoji ?? null, data.userId ?? null);
+        }
+      } catch (e) {
+        console.error(e);
+        alert(e instanceof Error ? e.message : 'Failed to react');
+      }
+    },
+    [userId, applyReaction]
+  );
+
+  const handleReactSelect = (message: ChatMessage, emoji: string) => {
+    setReactingTo(null);
+    void reactToMessage(message, emoji);
+  };
+
+  const insertEmojiAtCursor = (emoji: string) => {
+    const el = inputRef.current;
+    const pos = el?.selectionStart ?? draft.length;
+    const end = el?.selectionEnd ?? pos;
+    const next = draft.slice(0, pos) + emoji + draft.slice(end);
+    setDraft(next.slice(0, MAX_MSG_LENGTH));
+    setComposerPickerOpen(false);
+    requestAnimationFrame(() => {
+      const caret = pos + emoji.length;
+      el?.setSelectionRange(caret, caret);
+      el?.focus();
+    });
+  };
 
   useEffect(() => {
     if (ready && userId) {
@@ -269,6 +365,19 @@ export default function ChatClient() {
       socket.on('message_read_relay', (data: { messageId: string }) => {
         updateStatus(data.messageId, 'read');
       });
+
+      socket.on(
+        'message_reaction',
+        (data: {
+          messageId: string;
+          emoji: string | null;
+          userId: string | null;
+          roomId?: string;
+        }) => {
+          if (data.roomId && data.roomId !== roomId) return;
+          applyReaction(data.messageId, data.emoji ?? null, data.userId ?? null);
+        }
+      );
     })();
 
     return () => {
@@ -276,7 +385,7 @@ export default function ChatClient() {
       socketRef.current?.disconnect();
       socketRef.current = null;
     };
-  }, [ready, userId, otherUserId, roomId]);
+  }, [ready, userId, otherUserId, roomId, applyReaction]);
 
   useEffect(() => {
     const socket = socketRef.current;
@@ -295,8 +404,6 @@ export default function ChatClient() {
     if (messages.length === 0) return;
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length]);
-
-const MAX_MSG_LENGTH = 5000;
 
   const send = async () => {
     const text = draft.trim();
@@ -430,7 +537,7 @@ const MAX_MSG_LENGTH = 5000;
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               transition={{ type: 'spring', stiffness: 500, damping: 34 }}
-              className={`w-fit max-w-[80%] break-words rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
+              className={`group relative w-fit max-w-[80%] break-words rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
                 m.sender === 'me'
                   ? 'ml-auto bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-900/20'
                   : 'mr-auto bg-background-secondary text-text-primary border border-border'
@@ -441,6 +548,60 @@ const MAX_MSG_LENGTH = 5000;
                 <span className="mt-0.5 flex items-center justify-end gap-1">
                   <StatusTick status={m.status} />
                 </span>
+              )}
+
+              {m.reaction && (
+                <div
+                  className={`mt-1 flex ${
+                    m.sender === 'me' ? 'justify-end' : 'justify-start'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    title={m.reaction.mine ? 'Tap to remove reaction' : undefined}
+                    onClick={() => {
+                      if (m.reaction?.mine) void reactToMessage(m, m.reaction.emoji);
+                    }}
+                    className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-base leading-none transition ${
+                      m.sender === 'me'
+                        ? 'border-white/30 bg-white/20 text-white'
+                        : 'border-border bg-background-secondary text-text-primary'
+                    } ${
+                      m.reaction.mine
+                        ? 'cursor-pointer hover:opacity-75'
+                        : 'cursor-default'
+                    }`}
+                  >
+                    {m.reaction.emoji}
+                  </button>
+                </div>
+              )}
+
+              {m.sender === 'other' && (
+                <>
+                  <button
+                    type="button"
+                    title="Add reaction"
+                    onClick={() => {
+                      setComposerPickerOpen(false);
+                      setReactingTo(reactingTo === m.key ? null : m.key);
+                    }}
+                    className={`absolute bottom-1 left-2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background-secondary text-text-secondary shadow-sm transition hover:text-accent ${
+                      reactingTo === m.key
+                        ? 'opacity-100 text-accent'
+                        : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+                    }`}
+                  >
+                    <SmilePlus className="h-3.5 w-3.5" />
+                  </button>
+                  {reactingTo === m.key && (
+                    <div className="absolute bottom-full left-0 z-50 mb-2 w-[352px] max-w-[80vw] overflow-hidden rounded-2xl border border-border bg-background-secondary shadow-xl">
+                      <EmojiPicker
+                        onSelect={(emoji) => handleReactSelect(m, emoji)}
+                      />
+                    </div>
+                  )}
+                </>
               )}
             </motion.div>
           ))}
@@ -455,7 +616,29 @@ const MAX_MSG_LENGTH = 5000;
           void send();
         }}
       >
+        <div className="relative">
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.9 }}
+            onClick={() => {
+              setComposerPickerOpen((v) => !v);
+              setReactingTo(null);
+            }}
+            title="Add emoji"
+            className={`rounded-xl border border-border bg-input-bg p-2.5 text-text-secondary transition hover:text-accent ${
+              composerPickerOpen ? 'text-accent' : ''
+            }`}
+          >
+            <SmilePlus className="h-5 w-5" />
+          </motion.button>
+          {composerPickerOpen && (
+            <div className="absolute bottom-full left-0 z-50 mb-2 w-[352px] max-w-[80vw] overflow-hidden rounded-2xl border border-border bg-background-secondary shadow-xl">
+              <EmojiPicker onSelect={insertEmojiAtCursor} />
+            </div>
+          )}
+        </div>
         <input
+          ref={inputRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value.slice(0, MAX_MSG_LENGTH))}
           placeholder="Type a message…"

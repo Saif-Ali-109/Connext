@@ -58,6 +58,15 @@ export const sendMessage = rateLimit({
   message: { error: 'Too many messages. Slow down.' },
 });
 
+export const reactToMessage = rateLimit({
+  windowMs: 1 * minute,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyById,
+  message: { error: 'Too many reactions. Slow down.' },
+});
+
 export const createInvite = rateLimit({
   windowMs: 10 * minute,
   max: 10,

@@ -2,6 +2,7 @@ export { registerPresenceHandlers } from './presence';
 export { registerRoomHandlers } from './rooms';
 export { registerMessagingHandlers } from './messaging';
 export { registerTypingHandlers } from './typing';
+export { registerReactionHandlers } from './reactions';
 export type { SocketDeps } from './types';
 
 import type { Server } from 'socket.io';

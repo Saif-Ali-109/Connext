@@ -14,6 +14,7 @@ import { getDb } from '../lib/constants';
 import { asyncHandler } from '../lib/asyncHandler';
 import { sendSuccess, sendError } from '../lib/response';
 import { publicUser } from '../lib/user';
+import { toggleReaction as toggleMessageReaction, ReactionError } from '../lib/reactions';
 import crypto from 'crypto';
 
 const TTL = 30_000;
@@ -294,6 +295,8 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
       encryptedContent: messages.encryptedContent,
       encryptedContentForSender: messages.encryptedContentForSender,
       read: messages.read,
+      reaction: messages.reaction,
+      reactedByUserId: messages.reactedByUserId,
       deliveredAt: messages.deliveredAt,
       timestamp: messages.timestamp,
       totalCount: sql<number>`count(*) over()`,
@@ -312,6 +315,8 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
     text: msg.content || '',
     encryptedContent: msg.encryptedContent ?? null,
     encryptedContentForSender: msg.encryptedContentForSender ?? null,
+    reaction: msg.reaction ?? null,
+    reactedByUserId: msg.reactedByUserId ?? null,
     createdAt: msg.timestamp,
     deliveryState: msg.read ? 'read' : msg.deliveredAt ? 'delivered' : 'sent',
   }));
@@ -323,6 +328,28 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
     limit: limitNum,
     hasMore: offset + rows.length < Number(totalCount),
   });
+});
+
+export const toggleReaction = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const authenticatedUserId = getAuthenticatedUserId(req);
+  if (!authenticatedUserId) {
+    return sendError(res, 'Unauthorized: No active session', 401);
+  }
+
+  const { messageId, emoji } = req.body as { messageId?: string; emoji?: string };
+  if (!messageId || typeof emoji !== 'string') {
+    return sendError(res, 'messageId and emoji are required', 400);
+  }
+
+  try {
+    const result = await toggleMessageReaction({ userId: authenticatedUserId, messageId, emoji });
+    return sendSuccess(res, result);
+  } catch (err) {
+    if (err instanceof ReactionError) {
+      return sendError(res, err.message, err.status);
+    }
+    throw err;
+  }
 });
 
 export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) => {

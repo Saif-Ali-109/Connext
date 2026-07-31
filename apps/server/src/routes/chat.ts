@@ -6,6 +6,7 @@ import {
   removeRequest,
   getMessages,
   sendMessage,
+  toggleReaction,
   searchMessages,
   getUnreadMessageCounts,
   updateContactName,
@@ -18,6 +19,7 @@ import { authenticateToken } from '../middleware/auth.middleware';
 import {
   chatRequest,
   sendMessage as msgLimiter,
+  reactToMessage as reactLimiter,
   createInvite as inviteLimiter,
   standard,
 } from '../middleware/rateLimiter';
@@ -30,6 +32,7 @@ router.get('/requests', authenticateToken, getRequests);
 router.delete('/request/:requestId', authenticateToken, removeRequest);
 router.get('/messages/:roomId', authenticateToken, getMessages);
 router.post('/send-message', authenticateToken, msgLimiter, sendMessage);
+router.post('/react', authenticateToken, reactLimiter, toggleReaction);
 router.get('/unreadCounts', authenticateToken, getUnreadMessageCounts);
 router.put('/contact-name', authenticateToken, standard, updateContactName);
 router.post('/disconnect', authenticateToken, disconnectChat);
