@@ -3,16 +3,19 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
-import { ArrowLeft, Check, CheckCheck, Loader2, Send, SmilePlus } from 'lucide-react';
+import { ArrowLeft, Check, CheckCheck, Loader2, Paperclip, Send, SmilePlus } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
 import { otherUserIdFromRoom } from '../../lib/roomId';
 import { getApiBaseUrl } from '../../lib/api';
 import { encryptMessage, decryptMessage, ensureKeys } from '../../lib/crypto';
+import { uploadMedia, type FileAttachment } from '../../lib/media';
+import MediaMessage from '../../components/chat/MediaMessage';
 import Navigation from '../../components/Navigation';
-import { Spinner } from '../../components/ui/motion';
+import { Spinner, AnimatedButton } from '../../components/ui/motion';
 import EmojiPicker from '../../components/ui/EmojiPicker';
+import { useToast } from '../../components/ui/Toast';
 
 const SERVER_URL = getApiBaseUrl();
 
@@ -29,6 +32,21 @@ const STATUS_RANK: Record<DeliveryState, number> = {
 function bumpStatus(current: DeliveryState | undefined, next: DeliveryState): DeliveryState {
   if (!current) return next;
   return STATUS_RANK[next] > STATUS_RANK[current] ? next : current;
+}
+
+function formatTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const daysAgo = Math.round((startOfToday - startOfDay) / 86400000);
+  if (daysAgo === 0) return time;
+  if (daysAgo === 1) return `Yesterday, ${time}`;
+  const dateOptions: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+  if (date.getFullYear() !== now.getFullYear()) dateOptions.year = 'numeric';
+  return `${date.toLocaleDateString([], dateOptions)}, ${time}`;
 }
 
 function StatusTick({ status }: { status?: DeliveryState }) {
@@ -70,16 +88,40 @@ type ChatMessage = {
   createdAt: string;
   status?: DeliveryState;
   reaction?: { emoji: string; mine: boolean } | null;
+  attachment?: FileAttachment | null;
 };
 
 const MAX_MSG_LENGTH = 5000;
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const TYPING_STOP_MS = 2000;
+const TYPING_TIMEOUT_MS = 4000;
+
+function parseAttachment(text: string): FileAttachment | null {
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && parsed.type === 'file' && typeof parsed.objectKey === 'string') {
+      return {
+        type: 'file',
+        fileType: typeof parsed.fileType === 'string' ? parsed.fileType : '',
+        fileName: typeof parsed.fileName === 'string' ? parsed.fileName : 'File',
+        objectKey: parsed.objectKey,
+        size: typeof parsed.size === 'number' ? parsed.size : undefined,
+      };
+    }
+  } catch {
+    // not an attachment payload
+  }
+  return null;
+}
+const PAGE_SIZE = 20;
 
 export default function ChatClient() {
   const params = useParams();
   const router = useRouter();
   const roomId = String(params.roomId || '');
   const { status } = useSession();
-  const { ready, userId } = useBridge();
+  const { ready, settled, error: bridgeError, userId, retryBridge } = useBridge();
+  const toast = useToast();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
@@ -90,13 +132,24 @@ export default function ChatClient() {
   const [sending, setSending] = useState(false);
   const [composerPickerOpen, setComposerPickerOpen] = useState(false);
   const [reactingTo, setReactingTo] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [peerTyping, setPeerTyping] = useState(false);
+  const [peerOnline, setPeerOnline] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const readEmittedRef = useRef<Set<string>>(new Set());
   const messageIdsRef = useRef(new Set<string>());
   const lastProcessedCountRef = useRef(0);
   const tempIdCounter = useRef(0);
+  const typingSentRef = useRef(false);
+  const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const peerTypingTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pageRef = useRef(1);
+  const prevListRef = useRef<{ count: number; oldestId: string | null }>({ count: 0, oldestId: null });
 
   const otherUserId = userId ? otherUserIdFromRoom(roomId, userId) : null;
 
@@ -104,43 +157,44 @@ export default function ChatClient() {
     if (status === 'unauthenticated') router.replace('/login');
   }, [status, router]);
 
-  const loadMessages = useCallback(async () => {
-    if (!userId || !roomId) return;
-    try {
-      const res = await fetch(
-        `${SERVER_URL}/chat/messages/${encodeURIComponent(roomId)}?currentUserId=${userId}`,
-        { credentials: 'include' }
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to load messages');
-      const rows: ChatMessage[] = await Promise.all(
-        (data.messages || [])
-          .slice()
-          .reverse()
-          .map(
-            async (m: {
-              id: string;
-              sender: string;
-              text: string;
-              encryptedContent?: string | null;
-              encryptedContentForSender?: string | null;
-              reaction?: string | null;
-              reactedByUserId?: string | null;
-              createdAt: string;
-              deliveryState?: DeliveryState;
-            }) => {
-              let text = m.text;
-              const ciphertext =
-                m.sender === 'me'
-                  ? m.encryptedContentForSender
-                  : m.encryptedContent;
-              if (ciphertext) {
-                try {
-                  text = await decryptMessage(ciphertext);
-                } catch {
-                  text = '[encrypted]';
+  const loadMessages = useCallback(
+    async (page = 1, prepend = false) => {
+      if (!userId || !roomId) return;
+      try {
+        const res = await fetch(
+          `${SERVER_URL}/chat/messages/${encodeURIComponent(roomId)}?currentUserId=${userId}&page=${page}&limit=${PAGE_SIZE}`,
+          { credentials: 'include' }
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load messages');
+        const rows: ChatMessage[] = await Promise.all(
+          (data.messages || [])
+            .slice()
+            .reverse()
+            .map(
+              async (m: {
+                id: string;
+                sender: string;
+                text: string;
+                encryptedContent?: string | null;
+                encryptedContentForSender?: string | null;
+                reaction?: string | null;
+                reactedByUserId?: string | null;
+                createdAt: string;
+                deliveryState?: DeliveryState;
+              }) => {
+                let text = m.text;
+                const ciphertext =
+                  m.sender === 'me'
+                    ? m.encryptedContentForSender
+                    : m.encryptedContent;
+                if (ciphertext) {
+                  try {
+                    text = await decryptMessage(ciphertext);
+                  } catch {
+                    text = '[encrypted]';
+                  }
                 }
-              }
               return {
                 id: m.id,
                 key: m.id,
@@ -151,18 +205,34 @@ export default function ChatClient() {
                 reaction: m.reaction
                   ? { emoji: m.reaction, mine: m.reactedByUserId === userId }
                   : null,
+                attachment: parseAttachment(text),
               };
-            }
-          )
-      );
-      setMessages(rows);
-      messageIdsRef.current = new Set(rows.map((r: ChatMessage) => r.id));
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }, [userId, roomId]);
+              }
+            )
+        );
+        setHasMore(Boolean(data.hasMore));
+        pageRef.current = page;
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((p) => p.id));
+          const fresh = rows.filter((r) => !existingIds.has(r.id));
+          for (const r of fresh) messageIdsRef.current.add(r.id);
+          return prepend ? [...fresh, ...prev] : [...prev, ...fresh];
+        });
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+        setLoadingOlder(false);
+      }
+    },
+    [userId, roomId]
+  );
+
+  const loadOlder = useCallback(() => {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    void loadMessages(pageRef.current + 1, true);
+  }, [loadingOlder, loadMessages]);
 
   const loadPeer = useCallback(async () => {
     if (!otherUserId) return;
@@ -186,6 +256,16 @@ export default function ChatClient() {
       ownPublicKeyRef.current = pk;
     });
   }, []);
+
+  useEffect(() => {
+    if (!otherUserId) return;
+    fetch(`${SERVER_URL}/chat/online-status/${encodeURIComponent(otherUserId)}`, {
+      credentials: 'include',
+    })
+      .then((r) => r.json())
+      .then((d) => setPeerOnline(!!d.online))
+      .catch(() => {});
+  }, [otherUserId]);
 
   const applyReaction = useCallback(
     (messageId: string, emoji: string | null, reactedByUserId: string | null) => {
@@ -246,7 +326,7 @@ export default function ChatClient() {
         }
       } catch (e) {
         console.error(e);
-        alert(e instanceof Error ? e.message : 'Failed to react');
+        toast.error(e instanceof Error ? e.message : 'Failed to react');
       }
     },
     [userId, applyReaction]
@@ -273,7 +353,7 @@ export default function ChatClient() {
 
   useEffect(() => {
     if (ready && userId) {
-      void loadMessages();
+      void loadMessages(1, false);
       void loadPeer();
     }
   }, [ready, userId, loadMessages, loadPeer]);
@@ -346,6 +426,7 @@ export default function ChatClient() {
               sender: 'other',
               text,
               createdAt: payload.createdAt || new Date().toISOString(),
+              attachment: parseAttachment(text),
             },
           ]);
         });
@@ -378,10 +459,39 @@ export default function ChatClient() {
           applyReaction(data.messageId, data.emoji ?? null, data.userId ?? null);
         }
       );
+
+      socket.on('user_typing', (data: { userId?: string; roomId?: string }) => {
+        if (data.userId && data.userId !== otherUserId) return;
+        if (data.roomId && data.roomId !== roomId) return;
+        setPeerTyping(true);
+        if (peerTypingTimerRef.current) clearTimeout(peerTypingTimerRef.current);
+        peerTypingTimerRef.current = setTimeout(() => setPeerTyping(false), TYPING_TIMEOUT_MS);
+      });
+
+      socket.on('user_stopped_typing', (data: { userId?: string; roomId?: string }) => {
+        if (data.userId && data.userId !== otherUserId) return;
+        if (data.roomId && data.roomId !== roomId) return;
+        setPeerTyping(false);
+        if (peerTypingTimerRef.current) {
+          clearTimeout(peerTypingTimerRef.current);
+          peerTypingTimerRef.current = undefined;
+        }
+      });
+
+      socket.on('user_online', (data: { userId?: string }) => {
+        if (data.userId === otherUserId) setPeerOnline(true);
+      });
+
+      socket.on('user_offline', (data: { userId?: string }) => {
+        if (data.userId === otherUserId) setPeerOnline(false);
+      });
     })();
 
     return () => {
       cancelled = true;
+      if (typingSentRef.current) socketRef.current?.emit('typing_stop', { roomId });
+      if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+      if (peerTypingTimerRef.current) clearTimeout(peerTypingTimerRef.current);
       socketRef.current?.disconnect();
       socketRef.current = null;
     };
@@ -402,23 +512,64 @@ export default function ChatClient() {
 
   useEffect(() => {
     if (messages.length === 0) return;
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+    const { count, oldestId } = prevListRef.current;
+    const appendedAtBottom = count > 0 && messages.length > count && messages[0].id === oldestId;
+    if (count === 0 || appendedAtBottom) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevListRef.current = { count: messages.length, oldestId: messages[0].id };
+  }, [messages]);
 
-  const send = async () => {
-    const text = draft.trim();
+  const stopTyping = useCallback(() => {
+    const socket = socketRef.current;
+    if (typingSentRef.current) {
+      typingSentRef.current = false;
+      socket?.emit('typing_stop', { roomId });
+    }
+    if (typingStopTimerRef.current) {
+      clearTimeout(typingStopTimerRef.current);
+      typingStopTimerRef.current = undefined;
+    }
+  }, [roomId]);
+
+  const handleDraftChange = useCallback(
+    (value: string) => {
+      setDraft(value.slice(0, MAX_MSG_LENGTH));
+      const socket = socketRef.current;
+      if (!socket?.connected) return;
+      if (!typingSentRef.current) {
+        typingSentRef.current = true;
+        socket.emit('typing_start', { roomId });
+      }
+      if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+      typingStopTimerRef.current = setTimeout(stopTyping, TYPING_STOP_MS);
+    },
+    [roomId, stopTyping]
+  );
+
+  const send = async (attachment?: FileAttachment) => {
+    const text = attachment ? JSON.stringify(attachment) : draft.trim();
     if (!text || !userId || !otherUserId || sending) return;
-    if (text.length > MAX_MSG_LENGTH) {
-      alert(`Message too long (max ${MAX_MSG_LENGTH} characters)`);
+    if (!attachment && text.length > MAX_MSG_LENGTH) {
+      toast.error(`Message too long (max ${MAX_MSG_LENGTH} characters)`);
       return;
     }
     setSending(true);
-    setDraft('');
+    if (!attachment) setDraft('');
+    stopTyping();
 
     const tempId = `local-${Date.now()}-${++tempIdCounter.current}`;
     setMessages((prev) => [
       ...prev,
-      { id: tempId, key: tempId, sender: 'me', text, createdAt: new Date().toISOString(), status: 'sending' },
+      {
+        id: tempId,
+        key: tempId,
+        sender: 'me',
+        text,
+        createdAt: new Date().toISOString(),
+        status: 'sending',
+        attachment: attachment ?? null,
+      },
     ]);
 
     let encryptedContent: string | undefined;
@@ -432,7 +583,7 @@ export default function ChatClient() {
       } catch {
         setMessages((prev) => prev.filter((m) => m.id !== tempId));
         setDraft(text);
-        alert('Encryption failed');
+        toast.error('Encryption failed');
         setSending(false);
         return;
       }
@@ -495,16 +646,64 @@ export default function ChatClient() {
       console.error(e);
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setDraft(text);
-      alert(e instanceof Error ? e.message : 'Failed to send');
+      toast.error(e instanceof Error ? e.message : 'Failed to send');
     } finally {
       setSending(false);
     }
   };
 
-  if (status === 'loading' || loading) {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > MAX_FILE_BYTES) {
+      toast.error('File too large. Max allowed is 25 MB');
+      return;
+    }
+    setUploading(true);
+    try {
+      const { objectKey } = await uploadMedia(file);
+      const attachment: FileAttachment = {
+        type: 'file',
+        fileType: file.type,
+        fileName: file.name,
+        objectKey,
+        size: file.size,
+      };
+      await send(attachment);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  if (status === 'loading' || (loading && !settled) || (loading && ready)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Spinner />
+      </div>
+    );
+  }
+
+  if (settled && !ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md w-full space-y-4 rounded-2xl border border-border bg-background-primary/80 p-6 text-center backdrop-blur-md">
+          <h1 className="text-lg font-semibold text-text-primary">Couldn&apos;t open chat</h1>
+          <p className="text-sm text-text-secondary">
+            {bridgeError || 'Failed to connect your session to the API.'}
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
+            <AnimatedButton onClick={retryBridge} className="px-4 py-2 text-sm">
+              Try again
+            </AnimatedButton>
+            <button type="button" onClick={() => router.replace('/login')}
+              className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:border-accent hover:text-accent">
+              Back to login
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -521,13 +720,60 @@ export default function ChatClient() {
         >
           <ArrowLeft className="w-5 h-5" />
         </motion.button>
-        <div>
-          <div className="font-medium text-text-primary">{peerLabel}</div>
-          <div className="text-xs text-text-muted truncate max-w-xs">{roomId}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span
+              className={`h-2.5 w-2.5 shrink-0 rounded-full transition-colors ${
+                peerOnline ? 'bg-emerald-400' : 'bg-text-muted'
+              }`}
+              title={peerOnline ? 'Online' : 'Offline'}
+            />
+            <div className="font-medium text-text-primary truncate">{peerLabel}</div>
+          </div>
+          <AnimatePresence mode="wait" initial={false}>
+            {peerTyping ? (
+              <motion.div
+                key="typing"
+                initial={{ opacity: 0, y: 3 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -3 }}
+                transition={{ duration: 0.15 }}
+                className="text-xs text-accent"
+              >
+                {peerLabel} is typing…
+              </motion.div>
+            ) : (
+              <motion.div
+                key="room"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="text-xs text-text-muted truncate max-w-xs"
+              >
+                {roomId}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        {hasMore && (
+          <div className="flex justify-center">
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.95 }}
+              onClick={loadOlder}
+              disabled={loadingOlder}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background-secondary px-3 py-1.5 text-xs text-text-secondary transition hover:text-accent disabled:opacity-60"
+            >
+              {loadingOlder ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="Loading" />
+              ) : null}
+              {loadingOlder ? 'Loading…' : 'Load earlier messages'}
+            </motion.button>
+          </div>
+        )}
         <AnimatePresence initial={false}>
           {messages.map((m) => (
             <motion.div
@@ -539,13 +785,18 @@ export default function ChatClient() {
               transition={{ type: 'spring', stiffness: 500, damping: 34 }}
               className={`group relative w-fit max-w-[80%] break-words rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
                 m.sender === 'me'
-                  ? 'ml-auto bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-md shadow-violet-900/20'
+                  ? 'ml-auto bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 text-white shadow-md shadow-violet-900/20'
                   : 'mr-auto bg-background-secondary text-text-primary border border-border'
               }`}
             >
-              {m.text}
+              {m.attachment ? (
+                <MediaMessage attachment={m.attachment} />
+              ) : (
+                m.text
+              )}
               {m.sender === 'me' && (
-                <span className="mt-0.5 flex items-center justify-end gap-1">
+                <span className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-white/75">
+                  <span>{formatTimestamp(m.createdAt)}</span>
                   <StatusTick status={m.status} />
                 </span>
               )}
@@ -603,6 +854,11 @@ export default function ChatClient() {
                   )}
                 </>
               )}
+              {m.sender === 'other' && (
+                <span className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-text-muted">
+                  {formatTimestamp(m.createdAt)}
+                </span>
+              )}
             </motion.div>
           ))}
         </AnimatePresence>
@@ -625,7 +881,7 @@ export default function ChatClient() {
               setReactingTo(null);
             }}
             title="Add emoji"
-            className={`rounded-xl border border-border bg-input-bg p-2.5 text-text-secondary transition hover:text-accent ${
+            className={`rounded-xl border border-input-border bg-input-bg p-2.5 text-text-secondary transition hover:text-accent ${
               composerPickerOpen ? 'text-accent' : ''
             }`}
           >
@@ -637,20 +893,40 @@ export default function ChatClient() {
             </div>
           )}
         </div>
+        <motion.button
+          type="button"
+          whileTap={{ scale: 0.9 }}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          title="Attach a file"
+          className="rounded-xl border border-input-border bg-input-bg p-2.5 text-text-secondary transition hover:text-accent disabled:opacity-50"
+        >
+          {uploading ? (
+            <Loader2 className="h-5 w-5 animate-spin" />
+          ) : (
+            <Paperclip className="h-5 w-5" />
+          )}
+        </motion.button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={(e) => void handleFileChange(e)}
+        />
         <input
           ref={inputRef}
           value={draft}
-          onChange={(e) => setDraft(e.target.value.slice(0, MAX_MSG_LENGTH))}
+          onChange={(e) => handleDraftChange(e.target.value)}
           placeholder="Type a message…"
           maxLength={MAX_MSG_LENGTH}
-          className="flex-1 rounded-xl border border-border bg-input-bg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25"
+          className="flex-1 rounded-xl border border-input-border bg-input-bg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25"
         />
         <motion.button
           type="submit"
           whileHover={{ scale: sending || !draft.trim() ? 1 : 1.05 }}
           whileTap={{ scale: sending || !draft.trim() ? 1 : 0.92 }}
-          disabled={sending || !draft.trim()}
-          className="rounded-xl bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 text-white px-4 py-2 shadow-lg shadow-violet-900/25 disabled:opacity-50"
+          disabled={sending || uploading || !draft.trim()}
+          className="rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 text-white px-4 py-2 shadow-lg shadow-violet-900/25 disabled:opacity-50"
         >
           <Send className="w-4 h-4" />
         </motion.button>

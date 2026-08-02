@@ -124,6 +124,23 @@ function DashboardContent() {
     }
   };
 
+  const cancelRequest = async (requestId: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch(`${SERVER_URL}/chat/request/${encodeURIComponent(requestId)}`, {
+        method: 'DELETE', credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setMessage('Request cancelled');
+      await fetchAll();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleVerify = async (_user: { email: string; emailVerified: string }) => {
     await refreshProfile();
   };
@@ -191,6 +208,7 @@ function DashboardContent() {
               unreadCounts={unreadCounts}
               userId={userId!}
               busy={busy}
+              onRefresh={fetchAll}
             />
           )}
 
@@ -203,6 +221,7 @@ function DashboardContent() {
               message={message}
               onRespond={respond}
               onSendRequest={sendRequest}
+              onCancelRequest={cancelRequest}
               onRefresh={fetchAll}
             />
           )}

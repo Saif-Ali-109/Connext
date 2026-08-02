@@ -61,7 +61,7 @@ function PrimaryButton({
       whileHover={{ scale: props.disabled ? 1 : 1.02 }}
       whileTap={{ scale: props.disabled ? 1 : 0.98 }}
       {...(props as React.ComponentProps<typeof motion.button>)}
-      className="group relative w-full overflow-hidden rounded-xl bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/30 transition disabled:cursor-not-allowed disabled:opacity-60"
+      className="group relative w-full overflow-hidden rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/30 transition disabled:cursor-not-allowed disabled:opacity-60"
     >
       <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
       <span className="relative flex items-center justify-center gap-2">{children}</span>
@@ -257,7 +257,7 @@ export default function LoginPage() {
               {activeTab === tab && (
                 <motion.span
                   layoutId="tab-pill"
-                  className="absolute inset-0 -z-10 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 shadow-lg shadow-violet-900/30"
+                  className="absolute inset-0 -z-10 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 shadow-lg shadow-violet-900/30"
                   transition={{ type: 'spring', stiffness: 400, damping: 32 }}
                 />
               )}

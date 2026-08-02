@@ -16,7 +16,7 @@ const USERNAME_RE = /^[a-z0-9_]{3,24}$/;
 export default function OnboardingPage() {
   const router = useRouter();
   const { status } = useSession();
-  const { ready, profile, refreshProfile } = useBridge();
+  const { ready, settled, error: bridgeError, profile, refreshProfile, retryBridge } = useBridge();
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
@@ -98,10 +98,32 @@ export default function OnboardingPage() {
     }
   }
 
-  if (status === 'loading' || !ready) {
+  if (status === 'loading' || (!settled && !ready)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background-primary">
         <Spinner />
+      </div>
+    );
+  }
+
+  if (settled && !ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-background-primary">
+        <div className="max-w-md w-full space-y-4 rounded-2xl border border-border bg-background-primary/80 p-6 text-center backdrop-blur-md">
+          <h1 className="text-lg font-semibold text-text-primary">Couldn&apos;t open onboarding</h1>
+          <p className="text-sm text-text-secondary">
+            {bridgeError || 'Failed to connect your session to the API.'}
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
+            <AnimatedButton onClick={retryBridge} className="px-4 py-2 text-sm">
+              Try again
+            </AnimatedButton>
+            <button type="button" onClick={() => router.replace('/login')}
+              className="rounded-xl border border-border px-4 py-2 text-sm text-text-secondary hover:border-accent hover:text-accent">
+              Back to login
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -132,7 +154,7 @@ export default function OnboardingPage() {
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-1">
             <label className="text-xs uppercase text-text-muted">Username</label>
-            <div className="flex items-center rounded-xl border border-border bg-input-bg px-3 transition focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/25">
+            <div className="flex items-center rounded-xl border border-input-border bg-input-bg px-3 transition focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/25">
               <span className="text-text-muted">@</span>
               <input
                 autoFocus
@@ -153,7 +175,7 @@ export default function OnboardingPage() {
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder={profile?.name || 'How your name appears in chats'}
-              className="w-full rounded-xl border border-border bg-input-bg px-3 py-3 text-sm text-text-primary placeholder:text-text-muted outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25"
+              className="w-full rounded-xl border border-input-border bg-input-bg px-3 py-3 text-sm text-text-primary placeholder:text-text-muted outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25"
             />
           </div>
 

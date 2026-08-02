@@ -102,7 +102,7 @@ export default function SecuritySection({ email, emailVerified, onVerify }: Prop
                   onChange={(e) => { setInputEmail(e.target.value); setStep('idle'); }}
                   placeholder="your@email.com"
                   disabled={step === 'sent'}
-                  className="flex-1 rounded-lg border border-border bg-background-secondary px-3 py-2 text-sm disabled:opacity-50"
+                  className="flex-1 rounded-lg border border-input-border bg-background-secondary px-3 py-2 text-sm disabled:opacity-50"
                 />
                 <AnimatedButton
                   onClick={sendCode}
@@ -129,7 +129,7 @@ export default function SecuritySection({ email, emailVerified, onVerify }: Prop
                     onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="000000"
                     maxLength={6}
-                    className="flex-1 rounded-lg border border-border bg-background-secondary px-3 py-2 text-sm tracking-[0.5em] text-center font-mono text-lg"
+                    className="flex-1 rounded-lg border border-input-border bg-background-secondary px-3 py-2 text-sm tracking-[0.5em] text-center font-mono text-lg"
                   />
                   <AnimatedButton
                     onClick={verifyCode}

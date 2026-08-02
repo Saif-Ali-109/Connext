@@ -50,7 +50,7 @@ export default function Sidebar({ active, onSelect, pendingCount }: SidebarProps
                     initial={{ scale: 0 }}
                     animate={{ scale: 1 }}
                     transition={{ type: 'spring', stiffness: 500, damping: 20 }}
-                    className="ml-auto rounded-full bg-accent text-white text-xs px-2 py-0.5 hidden md:inline"
+                    className="ml-auto rounded-full bg-accent text-white dark:text-indigo-950 text-xs px-2 py-0.5 hidden md:inline"
                   >
                     {pendingCount}
                   </motion.span>

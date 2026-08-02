@@ -17,7 +17,7 @@ export default function PasswordInput({ className = '', themed = false, ...props
   const [visible, setVisible] = useState(false);
 
   const fieldClass = themed
-    ? 'w-full rounded-xl border border-border bg-input-bg px-3 py-3 pr-11 text-sm text-text-primary placeholder:text-text-muted outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25'
+    ? 'w-full rounded-xl border border-input-border bg-input-bg px-3 py-3 pr-11 text-sm text-text-primary placeholder:text-text-muted outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25'
     : 'w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-3 pr-11 text-sm outline-none focus:border-zinc-400';
 
   return (

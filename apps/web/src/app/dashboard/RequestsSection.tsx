@@ -40,6 +40,7 @@ interface Props {
   message: string | null;
   onRespond: (requestId: string, status: 'accepted' | 'rejected') => void;
   onSendRequest: (toUserId: string) => void;
+  onCancelRequest: (requestId: string) => void;
   onRefresh: () => void;
 }
 
@@ -51,11 +52,13 @@ export default function RequestsSection({
   message,
   onRespond,
   onSendRequest,
+  onCancelRequest,
   onRefresh,
 }: Props) {
-  const [reqTab, setReqTab] = useState<ReqTab>('incoming');
+  const [reqTab, setReqTab] = useState<ReqTab>('search');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<PublicUser[]>([]);
+  const [cancelFor, setCancelFor] = useState<string | null>(null);
 
   const searchUsers = async () => {
     if (query.trim().length < 2) return;
@@ -91,7 +94,7 @@ export default function RequestsSection({
       </AnimatePresence>
 
       <div className="flex gap-1 border-b border-border">
-        {(['incoming', 'outgoing', 'search'] as ReqTab[]).map((t) => (
+        {(['search', 'incoming', 'outgoing'] as ReqTab[]).map((t) => (
           <button
             key={t}
             onClick={() => setReqTab(t)}
@@ -160,7 +163,7 @@ export default function RequestsSection({
                         setReqTab('outgoing');
                       }}
                       disabled={busy || u.id === userId}
-                      className="inline-flex items-center gap-1 rounded-lg bg-accent text-white px-3 py-1.5 text-sm disabled:opacity-50"
+                      className="inline-flex items-center gap-1 rounded-lg bg-accent text-white dark:text-indigo-950 px-3 py-1.5 text-sm disabled:opacity-50"
                     >
                       <Send className="w-3.5 h-3.5" />
                       Request
@@ -256,6 +259,41 @@ export default function RequestsSection({
                     </div>
                     <div className="text-xs text-text-muted">pending</div>
                   </div>
+                  {cancelFor === r.id ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-text-secondary">Cancel request?</span>
+                      <motion.button
+                        whileHover={{ scale: busy ? 1 : 1.05 }}
+                        whileTap={{ scale: busy ? 1 : 0.95 }}
+                        onClick={() => {
+                          onCancelRequest(r.id);
+                          setCancelFor(null);
+                        }}
+                        disabled={busy}
+                        className="rounded-lg bg-red-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                      >
+                        Yes
+                      </motion.button>
+                      <button
+                        type="button"
+                        onClick={() => setCancelFor(null)}
+                        disabled={busy}
+                        className="rounded-lg border border-border px-3 py-1.5 text-sm text-text-secondary transition hover:border-accent hover:text-accent disabled:opacity-50"
+                      >
+                        No
+                      </button>
+                    </div>
+                  ) : (
+                    <motion.button
+                      whileHover={{ scale: busy ? 1 : 1.05 }}
+                      whileTap={{ scale: busy ? 1 : 0.95 }}
+                      onClick={() => setCancelFor(r.id)}
+                      disabled={busy}
+                      className="rounded-lg border border-border px-3 py-1.5 text-sm text-text-secondary transition hover:border-accent hover:text-accent disabled:opacity-50"
+                    >
+                      Cancel
+                    </motion.button>
+                  )}
                 </motion.li>
               ))}
             </AnimatePresence>

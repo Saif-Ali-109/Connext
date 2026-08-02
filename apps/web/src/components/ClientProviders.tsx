@@ -5,6 +5,7 @@ import React, { ReactNode, createContext, useContext, useCallback, useEffect, us
 import { usePathname, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { getApiBaseUrl } from '../lib/api';
+import { ToastProvider } from './ui/Toast';
 
 const NotificationManager = dynamic(() => import('./NotificationManager'), {
   ssr: false,
@@ -206,8 +207,10 @@ export default function ClientProviders({ children }: { children: ReactNode }) {
   return (
     <SessionProvider>
       <BridgeSession>
-        <NotificationManager />
-        {children}
+        <ToastProvider>
+          <NotificationManager />
+          {children}
+        </ToastProvider>
       </BridgeSession>
     </SessionProvider>
   );

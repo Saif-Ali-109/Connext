@@ -70,7 +70,7 @@ export default function ProfileSection({
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="your_username"
-              className="flex-1 rounded-lg border border-border bg-background-secondary px-3 py-2 text-sm"
+              className="flex-1 rounded-lg border border-input-border bg-background-secondary px-3 py-2 text-sm"
             />
             <AnimatedButton
               onClick={() => onSave({ username: username.trim() })}
@@ -91,7 +91,7 @@ export default function ProfileSection({
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Your display name"
-              className="flex-1 rounded-lg border border-border bg-background-secondary px-3 py-2 text-sm"
+              className="flex-1 rounded-lg border border-input-border bg-background-secondary px-3 py-2 text-sm"
             />
             <AnimatedButton
               onClick={() => onSave({ displayName: displayName.trim() })}

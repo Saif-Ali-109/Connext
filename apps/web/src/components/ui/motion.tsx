@@ -51,7 +51,7 @@ export function AnimatedButton({
       whileHover={{ scale: props.disabled ? 1 : 1.02 }}
       whileTap={{ scale: props.disabled ? 1 : 0.97 }}
       {...(props as React.ComponentProps<typeof motion.button>)}
-      className={`group relative overflow-hidden rounded-xl bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 font-semibold text-white shadow-lg shadow-violet-900/25 transition disabled:cursor-not-allowed disabled:opacity-60 ${className}`}
+      className={`group relative overflow-hidden rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 font-semibold text-white shadow-lg shadow-violet-900/25 transition disabled:cursor-not-allowed disabled:opacity-60 ${className}`}
     >
       <span className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
       <span className="relative flex items-center justify-center gap-2">{children}</span>
@@ -66,7 +66,7 @@ export function IconField({
   ...props
 }: { icon: React.ReactNode } & React.InputHTMLAttributes<HTMLInputElement>) {
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-border bg-input-bg px-3 transition focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/25">
+    <div className="flex items-center gap-2 rounded-xl border border-input-border bg-input-bg px-3 transition focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/25">
       <span className="text-text-muted">{icon}</span>
       <input
         {...props}
