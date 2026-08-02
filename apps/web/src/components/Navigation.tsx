@@ -9,6 +9,7 @@ import { useTheme } from './ThemeProvider';
 import { clearAuthSession } from '../lib/storage';
 import { signOut, useSession } from 'next-auth/react';
 import { getApiBaseUrl } from '../lib/api';
+import { useBridge } from '../components/ClientProviders';
 
 export default function Navigation() {
   const [mounted, setMounted] = useState(false);
@@ -17,6 +18,7 @@ export default function Navigation() {
   const pathname = usePathname();
   const { theme, toggleTheme } = useTheme();
   const { data: session, status } = useSession();
+  const { profile } = useBridge();
 
   useEffect(() => {
     setMounted(true);
@@ -33,6 +35,7 @@ export default function Navigation() {
   if (status === 'unauthenticated') return null;
 
   const label =
+    profile?.displayName ||
     session?.user?.name ||
     session?.user?.email ||
     'Account';
