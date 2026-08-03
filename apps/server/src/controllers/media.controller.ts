@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { and, eq, or } from 'drizzle-orm';
-import { chatRequests } from '@connext/db';
+import { chatRequests, isHiddenBy } from '@connext/db';
 import { getR2Client, R2_BUCKET, isR2Configured } from '../lib/r2';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { getDb } from '../lib/constants';
@@ -92,7 +92,7 @@ export const signDownloadUrl = asyncHandler(async (req: AuthRequest, res: Respon
       ),
     });
 
-    if (!hasConnection) {
+    if (!hasConnection || isHiddenBy(hasConnection.hiddenBy, String(authUserId))) {
       return sendError(res, 'Forbidden: You do not have an active chat with the uploader of this file', 403);
     }
   }

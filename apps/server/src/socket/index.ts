@@ -7,7 +7,7 @@ export type { SocketDeps } from './types';
 
 import type { Server } from 'socket.io';
 import { eq, or, and } from 'drizzle-orm';
-import { chatRequests } from '@connext/db';
+import { chatRequests, isHiddenBy } from '@connext/db';
 import { getDb } from '../lib/constants';
 import type { SocketDeps } from './types';
 
@@ -22,7 +22,7 @@ export function createSocketDeps(
       try {
         const db = getDb();
         const accepted = await db
-          .select({ fromUserId: chatRequests.fromUserId, toUserId: chatRequests.toUserId })
+          .select({ fromUserId: chatRequests.fromUserId, toUserId: chatRequests.toUserId, hiddenBy: chatRequests.hiddenBy })
           .from(chatRequests)
           .where(
             and(
@@ -31,6 +31,7 @@ export function createSocketDeps(
             )
           );
         for (const r of accepted) {
+          if (isHiddenBy(r.hiddenBy, userId)) continue;
           const contactId = r.fromUserId === userId ? r.toUserId : r.fromUserId;
           io.to(`user:${contactId}`).emit(event, payload);
         }

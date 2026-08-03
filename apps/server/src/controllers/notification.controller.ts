@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { and, eq, or } from 'drizzle-orm';
-import { users, chatRequests } from '@connext/db';
+import { users, chatRequests, isHiddenBy } from '@connext/db';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { getDb } from '../lib/constants';
 import { asyncHandler } from '../lib/asyncHandler';
@@ -33,7 +33,7 @@ export const sendPushNotification = asyncHandler(async (req: any, res: Response)
     ),
   });
 
-  if (!connection) {
+  if (!connection || isHiddenBy(connection.hiddenBy, senderUserId)) {
     return sendError(res, 'No accepted chat connection between these users', 403);
   }
 

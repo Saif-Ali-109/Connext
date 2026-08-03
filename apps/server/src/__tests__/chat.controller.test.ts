@@ -29,6 +29,8 @@ vi.mock('@connext/db', () => ({
   isParticipantRoomId: vi.fn((roomId: string, userId: string) =>
     roomId.split('_').includes(userId)
   ),
+  isHiddenBy: (hiddenBy: string[] | null | undefined, userId: string) =>
+    (hiddenBy ?? []).includes(userId),
 }));
 
 // Extend real crypto with mocked randomBytes
@@ -331,6 +333,26 @@ describe('chat controller', () => {
         senderKeyFingerprint: null,
       });
       expect(res.status).toHaveBeenCalledWith(202);
+    });
+
+    it('returns 403 if the authenticated user is hidden by their contact', async () => {
+      const { sendMessage } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      mockDb.query.users.findFirst.mockResolvedValueOnce(bob);
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+        hiddenBy: ['user-1'],
+      });
+
+      await sendMessage(
+        makeReq({ body: { recipientUserId: 'user-2', content: 'hello' } }),
+        res
+      );
+
+      expect(res.status).toHaveBeenCalledWith(403);
     });
   });
 

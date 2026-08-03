@@ -29,6 +29,8 @@ vi.mock('@connext/db', () => ({
   messages: {},
   chatRequests: {},
   getRoomId: vi.fn((a: string, b: string) => [a, b].sort().join('_')),
+  isHiddenBy: (hiddenBy: string[] | null | undefined, userId: string) =>
+    (hiddenBy ?? []).includes(userId),
   MESSAGE_MAX_LENGTH: 4000,
 }));
 
@@ -165,6 +167,33 @@ describe('socket send_message', () => {
             content: 'plain hello',
             senderKeyFingerprint: null,
           });
+           done();
+        }
+      );
+    });
+  }));
+
+  it('returns ack error if the authenticated user is hidden by their contact', () => new Promise<void>((done) => {
+    mockDb.query.chatRequests.findFirst.mockReset();
+    mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+      id: 'req-1',
+      fromUserId: 'user-1',
+      toUserId: 'user-2',
+      status: 'accepted',
+      hiddenBy: ['user-1'],
+    });
+
+    clientSocket = ioc(`http://localhost:${(httpServer.address() as any).port}`, {
+      auth: { token },
+    });
+
+    clientSocket.on('connect', () => {
+      clientSocket.emit(
+        'send_message',
+        { recipientUserId: 'user-2', content: 'hello' },
+        (ack: any) => {
+          expect(ack.ok).toBe(false);
+          expect(ack.error).toBe('No accepted connection between these users');
           done();
         }
       );

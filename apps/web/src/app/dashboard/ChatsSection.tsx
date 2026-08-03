@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { MessageSquare, MoreVertical, Search as SearchIcon, Link2, Check, FileText, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -9,6 +10,7 @@ import { getRoomId } from '../../lib/roomId';
 import { getApiBaseUrl } from '../../lib/api';
 import { copyTextToClipboard } from '../../lib/clipboard';
 import { useToast } from '../../components/ui/Toast';
+import { useOutsideClick } from '../../hooks/useOutsideClick';
 import {
   IconField,
   PageShell,
@@ -85,6 +87,25 @@ function ContactRow({
 
   const other = otherUserOf(contact, userId);
   const label = contactLabel(contact, userId);
+
+  const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const handleOutsideClick = useCallback((_e: MouseEvent | TouchEvent) => {
+    if (triggerRef.current?.contains(_e.target as Node)) return;
+    setMenuOpen(false);
+  }, []);
+  useOutsideClick(dropdownRef, handleOutsideClick);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('keydown', onKeydown);
+    return () => document.removeEventListener('keydown', onKeydown);
+  }, [menuOpen]);
 
   const startRename = () => {
     setRenameValue(label);
@@ -197,81 +218,94 @@ function ContactRow({
   }
 
   return (
-    <motion.li variants={listItem} className="relative">
-      <div className="flex items-center px-4 py-3 hover:bg-background-secondary">
-        <motion.button
-          whileHover={{ x: 4 }}
-          onClick={() => onOpen(contact)}
-          className="flex-1 flex items-center justify-between gap-3 text-left"
-        >
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span
-                className={`h-2 w-2 shrink-0 rounded-full transition-colors ${
-                  online ? 'bg-emerald-400' : 'bg-text-muted'
-                }`}
-                title={online ? 'Online' : 'Offline'}
-              />
-              <span className="font-medium text-text-primary truncate">{label}</span>
-            </div>
-            <div className="text-xs text-text-muted">@{other?.username || 'user'}</div>
-          </div>
-          {unread > 0 && (
-            <motion.span
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ type: 'spring', stiffness: 500, damping: 20 }}
-              className="rounded-full bg-accent text-white dark:text-indigo-950 text-xs px-2 py-0.5"
-            >
-              {unread}
-            </motion.span>
-          )}
-        </motion.button>
-        <div className="relative ml-2 shrink-0">
+    <>
+      <motion.li variants={listItem} className="relative">
+        <div className="flex items-center px-4 py-3 hover:bg-background-secondary">
           <motion.button
-            type="button"
-            whileTap={{ scale: 0.9 }}
-            onClick={(e) => {
-              e.stopPropagation();
-              setMenuOpen((v) => !v);
-            }}
-            aria-label="Contact options"
-            className="rounded-lg p-1.5 text-text-secondary transition hover:text-accent"
+            whileHover={{ x: 4 }}
+            onClick={() => onOpen(contact)}
+            className="flex-1 flex items-center justify-between gap-3 text-left"
           >
-            <MoreVertical className="w-4 h-4" />
-          </motion.button>
-          <AnimatePresence>
-            {menuOpen && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                transition={{ duration: 0.12 }}
-                className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-xl border border-border bg-background-secondary shadow-xl"
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full transition-colors ${
+                    online ? 'bg-emerald-400' : 'bg-text-muted'
+                  }`}
+                  title={online ? 'Online' : 'Offline'}
+                />
+                <span className="font-medium text-text-primary truncate">{label}</span>
+              </div>
+              <div className="text-xs text-text-muted">@{other?.username || 'user'}</div>
+            </div>
+            {unread > 0 && (
+              <motion.span
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 20 }}
+                className="rounded-full bg-accent text-white dark:text-indigo-950 text-xs px-2 py-0.5"
               >
-                <button
-                  type="button"
-                  onClick={startRename}
-                  className="w-full px-3 py-2 text-left text-sm text-text-primary transition hover:bg-background-primary"
-                >
-                  Rename contact
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConfirmingRemove(true);
-                    setMenuOpen(false);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-red-600 transition hover:bg-background-primary"
-                >
-                  Remove contact
-                </button>
-              </motion.div>
+                {unread}
+              </motion.span>
             )}
-          </AnimatePresence>
+          </motion.button>
+          <div className="ml-2 shrink-0">
+            <motion.button
+              type="button"
+              ref={triggerRef}
+              whileTap={{ scale: 0.9 }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setTriggerRect(e.currentTarget.getBoundingClientRect());
+                setMenuOpen((v) => !v);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label="Contact options"
+              className="rounded-lg p-1.5 text-text-secondary transition hover:text-accent"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </motion.button>
+          </div>
         </div>
-      </div>
-    </motion.li>
+      </motion.li>
+      <AnimatePresence>
+        {menuOpen && triggerRect &&
+          createPortal(
+            <motion.div
+              ref={dropdownRef}
+              initial={{ opacity: 0, scale: 0.95, y: 4 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 4 }}
+              transition={{ duration: 0.12 }}
+              className="fixed z-50 mb-1 w-44 overflow-hidden rounded-xl border border-border bg-background-secondary shadow-xl"
+              style={{
+                right: window.innerWidth - triggerRect.right,
+                bottom: window.innerHeight - triggerRect.top,
+              }}
+            >
+              <button
+                type="button"
+                onClick={startRename}
+                className="w-full px-3 py-2 text-left text-sm text-text-primary transition hover:bg-background-primary"
+              >
+                Rename contact
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingRemove(true);
+                  setMenuOpen(false);
+                }}
+                className="w-full px-3 py-2 text-left text-sm text-red-600 transition hover:bg-background-primary"
+              >
+                Remove contact
+              </button>
+            </motion.div>,
+            document.body
+          )}
+      </AnimatePresence>
+    </>
   );
 }
 

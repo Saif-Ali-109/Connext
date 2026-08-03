@@ -7,6 +7,7 @@ import {
   invites,
   getRoomId,
   isParticipantRoomId,
+  isHiddenBy,
   MESSAGE_MAX_LENGTH,
 } from '@connext/db';
 import { AuthRequest } from '../middleware/auth.middleware';
@@ -34,9 +35,6 @@ function invalidateRequestCache(...userIds: string[]) {
 
 const getAuthenticatedUserId = (req: AuthRequest): string =>
   String(req.user?.id || '');
-
-const isHiddenBy = (hiddenBy: string[] | null | undefined, userId: string) =>
-  (hiddenBy ?? []).includes(userId);
 
 export const sendRequest = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { toUserId, toUsername } = req.body as {
@@ -466,7 +464,7 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
     ),
   });
 
-  if (!request) {
+  if (!request || isHiddenBy(request.hiddenBy, authenticatedUserId)) {
     return sendError(res, 'No accepted connection between these users', 403);
   }
 

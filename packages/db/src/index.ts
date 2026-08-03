@@ -20,3 +20,7 @@ export function otherUserIdFromRoom(roomId: string, userId: string): string | nu
   if (b === userId) return a;
   return null;
 }
+
+export function isHiddenBy(hiddenBy: string[] | null | undefined, userId: string): boolean {
+  return (hiddenBy ?? []).includes(userId);
+}

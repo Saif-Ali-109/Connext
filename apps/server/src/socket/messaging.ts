@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'socket.io';
 import { eq, and, or, isNull } from 'drizzle-orm';
-import { users, messages, chatRequests, getRoomId, MESSAGE_MAX_LENGTH } from '@connext/db';
+import { users, messages, chatRequests, getRoomId, isHiddenBy, MESSAGE_MAX_LENGTH } from '@connext/db';
 import { getDb } from '../lib/constants';
 import { logger } from '../lib/logger';
 import type { SocketDeps } from './types';
@@ -79,7 +79,7 @@ export function registerMessagingHandlers(io: Server, socket: Socket, deps: Sock
           ),
         });
 
-        if (!request) {
+        if (!request || isHiddenBy(request.hiddenBy, currentUserId)) {
           ack?.({ ok: false, error: 'No accepted connection between these users' });
           return;
         }
