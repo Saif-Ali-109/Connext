@@ -3,13 +3,19 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
-import { ArrowLeft, Check, CheckCheck, Loader2, Lock, Paperclip, Send, ShieldAlert, SmilePlus } from 'lucide-react';
+import { ArrowLeft, Check, CheckCheck, Loader2, Lock, Paperclip, Send, ShieldAlert, SmilePlus, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
 import { otherUserIdFromRoom } from '../../lib/roomId';
 import { getApiBaseUrl } from '../../lib/api';
-import { encryptMessage, decryptMessage, ensureKeys } from '../../lib/crypto';
+import {
+  decryptMessage,
+  encryptMessage,
+  getStoredPublicKey,
+  syncKeyWithServer,
+  uploadKeyWithProof,
+} from '../../lib/crypto';
 import { uploadMedia, type FileAttachment } from '../../lib/media';
 import MediaMessage from '../../components/chat/MediaMessage';
 import Navigation from '../../components/Navigation';
@@ -89,6 +95,7 @@ type ChatMessage = {
   status?: DeliveryState;
   reaction?: { emoji: string; mine: boolean } | null;
   attachment?: FileAttachment | null;
+  decryptionFailed?: boolean;
 };
 
 const MAX_MSG_LENGTH = 5000;
@@ -128,6 +135,8 @@ export default function ChatClient() {
   const [loading, setLoading] = useState(true);
   const [peerLabel, setPeerLabel] = useState('Chat');
   const [peerPublicKey, setPeerPublicKey] = useState<string | null>(null);
+  const [keyStatus, setKeyStatus] = useState<'checking' | 'ok' | 'mismatch' | 'unavailable'>('checking');
+  const [serverFingerprint, setServerFingerprint] = useState<string | null>(null);
   const ownPublicKeyRef = useRef<string | null>(null);
   const [sending, setSending] = useState(false);
   const [composerPickerOpen, setComposerPickerOpen] = useState(false);
@@ -152,6 +161,7 @@ export default function ChatClient() {
   const prevListRef = useRef<{ count: number; oldestId: string | null }>({ count: 0, oldestId: null });
 
   const otherUserId = userId ? otherUserIdFromRoom(roomId, userId) : null;
+  const hasUndecryptableMessages = messages.some((m) => m.decryptionFailed);
 
   useEffect(() => {
     if (status === 'unauthenticated') router.replace('/login');
@@ -184,6 +194,7 @@ export default function ChatClient() {
                 deliveryState?: DeliveryState;
               }) => {
                 let text = m.text;
+                let decryptionFailed = false;
                 const ciphertext =
                   m.sender === 'me'
                     ? m.encryptedContentForSender
@@ -192,7 +203,8 @@ export default function ChatClient() {
                   try {
                     text = await decryptMessage(ciphertext);
                   } catch {
-                    text = '[encrypted]';
+                    text = '';
+                    decryptionFailed = true;
                   }
                 }
               return {
@@ -200,12 +212,13 @@ export default function ChatClient() {
                 key: m.id,
                 sender: m.sender === 'me' ? 'me' : ('other' as const),
                 text,
+                decryptionFailed,
                 createdAt: m.createdAt,
                 status: m.sender === 'me' ? m.deliveryState ?? 'sent' : undefined,
                 reaction: m.reaction
                   ? { emoji: m.reaction, mine: m.reactedByUserId === userId }
                   : null,
-                attachment: parseAttachment(text),
+                attachment: decryptionFailed ? null : parseAttachment(text),
               };
               }
             )
@@ -250,12 +263,55 @@ export default function ChatClient() {
     }
   }, [otherUserId]);
 
-  // Ensure current user has E2EE keys; generate + upload if missing
+  // Ensure current user has E2EE keys; detect mismatch with server-stored key
   useEffect(() => {
-    ensureKeys(SERVER_URL).then((pk) => {
-      ownPublicKeyRef.current = pk;
+    let cancelled = false;
+    syncKeyWithServer(SERVER_URL).then((result) => {
+      if (cancelled) return;
+      setKeyStatus(result.status);
+      setServerFingerprint(result.serverFingerprint);
+      ownPublicKeyRef.current = getStoredPublicKey();
     });
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  const resyncKey = useCallback(async () => {
+    try {
+      await uploadKeyWithProof(SERVER_URL);
+      const result = await syncKeyWithServer(SERVER_URL);
+      setKeyStatus(result.status);
+      setServerFingerprint(result.serverFingerprint);
+      ownPublicKeyRef.current = getStoredPublicKey();
+      toast.success('Key re-synced — new messages will decrypt correctly');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to re-sync key');
+    }
+  }, [toast]);
+
+  const clearHistory = useCallback(async () => {
+    if (!window.confirm('Clear all messages in this conversation? This can\'t be undone.')) return;
+    try {
+      const res = await fetch(
+        `${SERVER_URL}/chat/history/${encodeURIComponent(roomId)}`,
+        { method: 'DELETE', credentials: 'include' }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to clear history');
+      setMessages([]);
+      messageIdsRef.current.clear();
+      readEmittedRef.current.clear();
+      lastProcessedCountRef.current = 0;
+      pageRef.current = 1;
+      prevListRef.current = { count: 0, oldestId: null };
+      void loadMessages(1, false);
+      toast.success('Conversation cleared');
+    } catch (e) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : 'Failed to clear history');
+    }
+  }, [roomId, loadMessages, toast]);
 
   useEffect(() => {
     if (!otherUserId) return;
@@ -414,10 +470,13 @@ export default function ChatClient() {
 
         const ciphertext = payload.encryptedContent;
         const resolveText = ciphertext
-          ? decryptMessage(ciphertext).catch(() => '[encrypted]')
-          : Promise.resolve(payload.content || '');
+          ? decryptMessage(ciphertext).then(
+              (decrypted) => ({ text: decrypted, decryptionFailed: false }),
+              () => ({ text: '', decryptionFailed: true })
+            )
+          : Promise.resolve({ text: payload.content || '', decryptionFailed: false });
 
-        resolveText.then((text) => {
+        resolveText.then(({ text, decryptionFailed }) => {
           setMessages((prev) => [
             ...prev,
             {
@@ -425,8 +484,9 @@ export default function ChatClient() {
               key: payload.id,
               sender: 'other',
               text,
+              decryptionFailed,
               createdAt: payload.createdAt || new Date().toISOString(),
-              attachment: parseAttachment(text),
+              attachment: decryptionFailed ? null : parseAttachment(text),
             },
           ]);
         });
@@ -552,6 +612,10 @@ export default function ChatClient() {
     if (!text || !userId || !otherUserId || sending) return;
     if (!attachment && text.length > MAX_MSG_LENGTH) {
       toast.error(`Message too long (max ${MAX_MSG_LENGTH} characters)`);
+      return;
+    }
+    if (!peerPublicKey && !attachment) {
+      toast.error('Can\'t send — this chat isn\'t end-to-end encrypted. Ask the recipient to set up their key.');
       return;
     }
     setSending(true);
@@ -750,7 +814,19 @@ export default function ChatClient() {
                 exit={{ opacity: 0 }}
                 className="text-xs text-text-muted truncate max-w-xs flex items-center gap-1"
               >
-                {peerPublicKey ? (
+                {keyStatus === 'mismatch' || keyStatus === 'unavailable' ? (
+                  <span className="inline-flex items-center gap-1.5 text-amber-500">
+                    <ShieldAlert className="w-3 h-3 shrink-0" />
+                    <span>Key mismatch — old messages can&apos;t be decrypted</span>
+                    <button
+                      type="button"
+                      onClick={() => void resyncKey()}
+                      className="ml-0.5 rounded-md border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-medium transition hover:bg-amber-500/10"
+                    >
+                      Re-sync
+                    </button>
+                  </span>
+                ) : peerPublicKey ? (
                   <>
                     <Lock className="w-3 h-3" />
                     <span>End-to-end encrypted</span>
@@ -764,6 +840,16 @@ export default function ChatClient() {
               </motion.div>
             )}
           </AnimatePresence>
+          {hasUndecryptableMessages && (
+            <button
+              type="button"
+              onClick={() => void clearHistory()}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-text-muted transition hover:border-red-400/40 hover:text-red-400"
+            >
+              <Trash2 className="h-3 w-3" />
+              Clear history
+            </button>
+          )}
         </div>
       </header>
 
@@ -801,6 +887,11 @@ export default function ChatClient() {
             >
               {m.attachment ? (
                 <MediaMessage attachment={m.attachment} />
+              ) : m.decryptionFailed ? (
+                <span className="inline-flex items-center gap-1.5 italic text-text-muted">
+                  <ShieldAlert className="w-4 h-4 shrink-0" />
+                  Message encrypted with a previous key — can&apos;t be decrypted
+                </span>
               ) : (
                 m.text
               )}
@@ -876,12 +967,19 @@ export default function ChatClient() {
       </div>
 
       <form
-        className="border-t border-border p-3 flex gap-2"
+        className="border-t border-border p-3 flex flex-col gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           void send();
         }}
       >
+        {!peerPublicKey && (
+          <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+            <ShieldAlert className="h-4 w-4 shrink-0" />
+            <span>Not end-to-end encrypted — sending is disabled for this chat</span>
+          </div>
+        )}
+        <div className="flex gap-2">
         <div className="relative">
           <motion.button
             type="button"
@@ -933,13 +1031,14 @@ export default function ChatClient() {
         />
         <motion.button
           type="submit"
-          whileHover={{ scale: sending || !draft.trim() ? 1 : 1.05 }}
-          whileTap={{ scale: sending || !draft.trim() ? 1 : 0.92 }}
-          disabled={sending || uploading || !draft.trim()}
+          whileHover={{ scale: sending || !draft.trim() || !peerPublicKey ? 1 : 1.05 }}
+          whileTap={{ scale: sending || !draft.trim() || !peerPublicKey ? 1 : 0.92 }}
+          disabled={sending || uploading || !draft.trim() || !peerPublicKey}
           className="rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 text-white px-4 py-2 shadow-lg shadow-violet-900/25 disabled:opacity-50"
         >
           <Send className="w-4 h-4" />
         </motion.button>
+        </div>
       </form>
     </div>
   );

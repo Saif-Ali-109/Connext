@@ -9,6 +9,7 @@ export function publicUser(row: typeof users.$inferSelect) {
     displayName: row.displayName || row.name,
     avatarUrl: row.avatarUrl || row.image,
     publicKey: row.publicKey ?? null,
+    fingerprint: row.keyFingerprint ?? null,
     lastSeenAt: row.lastSeenAt,
     hasPassword: Boolean(row.passwordHash),
     emailVerified: row.emailVerified ?? null,

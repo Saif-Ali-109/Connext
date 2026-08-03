@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
 import { getApiBaseUrl } from '../../lib/api';
-import { generateKeyPair, storeKeyPair } from '../../lib/crypto';
+import { generateKeyPair, storeKeyPair, uploadKeyWithProof } from '../../lib/crypto';
 import PasswordInput from '../../components/PasswordInput';
 import { AnimatedButton, Spinner } from '../../components/ui/motion';
 
@@ -80,12 +80,7 @@ export default function OnboardingPage() {
       try {
         const { publicKey, privateKey } = await generateKeyPair();
         storeKeyPair(publicKey, privateKey);
-        await fetch(`${SERVER_URL}/auth/public-key`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ publicKey }),
-        });
+        await uploadKeyWithProof(SERVER_URL);
       } catch {
         // non-blocking: keys can be regenerated later
       }

@@ -294,6 +294,7 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
       content: messages.content,
       encryptedContent: messages.encryptedContent,
       encryptedContentForSender: messages.encryptedContentForSender,
+      senderKeyFingerprint: messages.senderKeyFingerprint,
       read: messages.read,
       reaction: messages.reaction,
       reactedByUserId: messages.reactedByUserId,
@@ -315,6 +316,7 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
     text: msg.content || '',
     encryptedContent: msg.encryptedContent ?? null,
     encryptedContentForSender: msg.encryptedContentForSender ?? null,
+    senderKeyFingerprint: msg.senderKeyFingerprint ?? null,
     reaction: msg.reaction ?? null,
     reactedByUserId: msg.reactedByUserId ?? null,
     createdAt: msg.timestamp,
@@ -328,6 +330,51 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
     limit: limitNum,
     hasMore: offset + rows.length < Number(totalCount),
   });
+});
+
+export const clearChatHistory = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { roomId } = req.params;
+  const authenticatedUserId = getAuthenticatedUserId(req);
+
+  if (!authenticatedUserId) {
+    return sendError(res, 'Unauthorized: No active session', 401);
+  }
+
+  if (!roomId || !isParticipantRoomId(roomId, authenticatedUserId)) {
+    return sendError(res, 'Invalid Room ID', 400);
+  }
+
+  const parts = roomId.split('_');
+  const otherId = parts.find((p) => p !== authenticatedUserId);
+  if (!otherId) {
+    return sendError(res, 'Invalid Room ID', 400);
+  }
+
+  const db = getDb();
+  const connection = await db.query.chatRequests.findFirst({
+    where: and(
+      or(
+        and(
+          eq(chatRequests.fromUserId, authenticatedUserId),
+          eq(chatRequests.toUserId, otherId)
+        ),
+        and(
+          eq(chatRequests.fromUserId, otherId),
+          eq(chatRequests.toUserId, authenticatedUserId)
+        )
+      ),
+      eq(chatRequests.status, 'accepted')
+    ),
+  });
+
+  if (!connection || isHiddenBy(connection.hiddenBy, authenticatedUserId)) {
+    return sendError(res, 'Forbidden: no accepted connection for this room', 403);
+  }
+
+  invalidateRequestCache(authenticatedUserId, otherId);
+
+  await db.delete(messages).where(eq(messages.roomId, roomId));
+  return sendSuccess(res, { ok: true });
 });
 
 export const toggleReaction = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -359,6 +406,7 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
     content,
     encryptedContent,
     encryptedContentForSender,
+    senderKeyFingerprint,
   } = req.body as {
     senderId?: string;
     recipientUserId?: string;
@@ -366,6 +414,7 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
     content?: string;
     encryptedContent?: string;
     encryptedContentForSender?: string;
+    senderKeyFingerprint?: string;
   };
 
   const authenticatedUserId = getAuthenticatedUserId(req);
@@ -428,9 +477,10 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
     .values({
       senderId: authenticatedUserId,
       roomId,
-      content: content || bodyText,
+      content: encryptedContent ? null : (content ?? null),
       encryptedContent: encryptedContent ?? null,
       encryptedContentForSender: encryptedContentForSender ?? null,
+      senderKeyFingerprint: senderKeyFingerprint ?? null,
     })
     .returning();
 

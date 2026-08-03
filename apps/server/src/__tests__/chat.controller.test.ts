@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.middleware';
+import { messages } from '@connext/db';
 
 function chain() {
   const c: any = {};
@@ -47,6 +48,19 @@ function makeRes(): Response {
   res.status = vi.fn().mockReturnValue(res);
   res.json = vi.fn().mockReturnValue(res);
   return res;
+}
+
+function sqlContainsValue(node: unknown, value: string): boolean {
+  if (node === null || typeof node !== 'object') return false;
+  const n = node as Record<string, unknown>;
+  if (n.value === value) return true;
+  const chunks = Array.isArray(n.queryChunks)
+    ? n.queryChunks
+    : Array.isArray(n.chunks)
+      ? n.chunks
+      : null;
+  if (chunks) return chunks.some((c: unknown) => sqlContainsValue(c, value));
+  return false;
 }
 
 const alice = { id: 'user-1', email: 'a@b.com', name: 'Alice', username: 'alice', displayName: 'Alice', avatarUrl: null, image: null };
@@ -223,6 +237,188 @@ describe('chat controller', () => {
       }
       await toggleReaction(makeReq({ body: { messageId: 'm1', emoji: '👍' } }), res);
       expect(res.status).toHaveBeenCalledWith(409);
+    });
+  });
+
+  describe('sendMessage', () => {
+    function mockInsertReturning() {
+      let valuesArg: Record<string, unknown> | undefined;
+      mockDb.values.mockImplementationOnce((v: Record<string, unknown>) => {
+        valuesArg = v;
+        return mockDb;
+      });
+      mockDb.returning.mockResolvedValueOnce([{ id: 'm1', senderId: 'user-1' }]);
+      return () => valuesArg;
+    }
+
+    it('returns 401 if no authenticated user', async () => {
+      const { sendMessage } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await sendMessage(makeReq({ user: undefined }), res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 400 if recipient missing', async () => {
+      const { sendMessage } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await sendMessage(makeReq({ body: { content: 'hello' } }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('returns 403 if senderId does not match authenticated user', async () => {
+      const { sendMessage } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await sendMessage(
+        makeReq({ body: { senderId: 'someone-else', recipientUserId: 'user-2', content: 'hello' } }),
+        res
+      );
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('persists null content and senderKeyFingerprint for encrypted messages', async () => {
+      const { sendMessage } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      mockDb.query.users.findFirst.mockResolvedValueOnce(bob);
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+      });
+      const getValuesArg = mockInsertReturning();
+
+      await sendMessage(
+        makeReq({
+          body: {
+            recipientUserId: 'user-2',
+            encryptedContent: 'ciphertext',
+            encryptedContentForSender: 'cipher-for-sender',
+            senderKeyFingerprint: 'fp-1',
+          },
+        }),
+        res
+      );
+
+      expect(getValuesArg()).toMatchObject({
+        content: null,
+        encryptedContent: 'ciphertext',
+        encryptedContentForSender: 'cipher-for-sender',
+        senderKeyFingerprint: 'fp-1',
+      });
+      expect(res.status).toHaveBeenCalledWith(202);
+    });
+
+    it('persists plain content when not encrypted', async () => {
+      const { sendMessage } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      mockDb.query.users.findFirst.mockResolvedValueOnce(bob);
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+      });
+      const getValuesArg = mockInsertReturning();
+
+      await sendMessage(
+        makeReq({ body: { recipientUserId: 'user-2', content: 'plain hello' } }),
+        res
+      );
+
+      expect(getValuesArg()).toMatchObject({
+        content: 'plain hello',
+        encryptedContent: null,
+        senderKeyFingerprint: null,
+      });
+      expect(res.status).toHaveBeenCalledWith(202);
+    });
+  });
+
+  describe('clearChatHistory', () => {
+    it('returns 401 if no authenticated user', async () => {
+      const { clearChatHistory } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await clearChatHistory(makeReq({ user: undefined }), res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 400 if roomId is missing', async () => {
+      const { clearChatHistory } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await clearChatHistory(makeReq({ params: {} }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('returns 400 if roomId is not a participant room', async () => {
+      const { clearChatHistory } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await clearChatHistory(makeReq({ params: { roomId: 'user-9_user-3' } }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('returns 403 if no accepted connection exists for the room', async () => {
+      const { clearChatHistory } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce(null);
+      const res = makeRes();
+      await clearChatHistory(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(mockDb.delete).not.toHaveBeenCalled();
+    });
+
+    it('deletes all messages in the room on success', async () => {
+      const { clearChatHistory } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+      });
+      const res = makeRes();
+      let whereArg: unknown;
+      mockDb.where.mockImplementationOnce((arg: unknown) => {
+        whereArg = arg;
+        return mockDb;
+      });
+
+      await clearChatHistory(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+      expect(mockDb.delete).toHaveBeenCalledWith(messages);
+      expect(mockDb.where).toHaveBeenCalled();
+      expect(sqlContainsValue(whereArg, 'user-1_user-2')).toBe(true);
+    });
+
+    it('invalidates the request cache for both participants', async () => {
+      const { getRequests, clearChatHistory } = await import('../controllers/chat.controller');
+
+      const mockSelectChain = () =>
+        mockDb.select.mockReturnValueOnce({
+          from: vi.fn().mockReturnValueOnce({
+            where: vi.fn().mockResolvedValueOnce([]),
+          }),
+        });
+
+      mockSelectChain();
+      const res1 = makeRes();
+      await getRequests(makeReq(), res1);
+      expect(res1.status).toHaveBeenCalledWith(200);
+
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+      });
+      const res2 = makeRes();
+      await clearChatHistory(makeReq({ params: { roomId: 'user-1_user-2' } }), res2);
+      expect(res2.status).toHaveBeenCalledWith(200);
+
+      mockDb.select.mockClear();
+      mockSelectChain();
+      const res3 = makeRes();
+      await getRequests(makeReq(), res3);
+      expect(mockDb.select).toHaveBeenCalled();
     });
   });
 });

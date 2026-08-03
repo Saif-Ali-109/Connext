@@ -20,6 +20,7 @@ export function registerMessagingHandlers(io: Server, socket: Socket, deps: Sock
         content?: string;
         encryptedContent?: string;
         encryptedContentForSender?: string;
+        senderKeyFingerprint?: string;
       },
       ack?: (payload: {
         ok: boolean;
@@ -94,6 +95,7 @@ export function registerMessagingHandlers(io: Server, socket: Socket, deps: Sock
           content: string | null;
           encryptedContent: string | null;
           encryptedContentForSender: string | null;
+          senderKeyFingerprint: string | null;
           createdAt: string;
         } = {
           id: messageId || `relay-${Date.now()}`,
@@ -102,6 +104,7 @@ export function registerMessagingHandlers(io: Server, socket: Socket, deps: Sock
           content: data.content ?? null,
           encryptedContent: data.encryptedContent ?? null,
           encryptedContentForSender: data.encryptedContentForSender ?? null,
+          senderKeyFingerprint: data.senderKeyFingerprint ?? null,
           createdAt: new Date().toISOString(),
         };
 
@@ -115,6 +118,7 @@ export function registerMessagingHandlers(io: Server, socket: Socket, deps: Sock
               content: data.content ?? null,
               encryptedContent: data.encryptedContent ?? null,
               encryptedContentForSender: data.encryptedContentForSender ?? null,
+              senderKeyFingerprint: data.senderKeyFingerprint ?? null,
             })
             .returning();
           relayPayload.id = dbMsg.id;

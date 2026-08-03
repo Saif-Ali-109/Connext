@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
+import crypto from 'crypto';
 import type { Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.middleware';
 
@@ -53,6 +54,24 @@ describe('auth controller', () => {
     }
   });
 
+  let rsa: { publicKeyB64: string; privateKey: crypto.KeyObject; fingerprint: string };
+  let signNonce: (nonce: string) => string;
+
+  beforeAll(() => {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicExponent: 0x10001,
+    });
+    const spkiDer = publicKey.export({ type: 'spki', format: 'der' });
+    rsa = {
+      publicKeyB64: spkiDer.toString('base64'),
+      privateKey,
+      fingerprint: crypto.createHash('sha256').update(spkiDer).digest('hex'),
+    };
+    signNonce = (nonce: string) =>
+      crypto.sign('sha256', Buffer.from(nonce), privateKey).toString('base64');
+  });
+
   describe('logout', () => {
     it('clears cookie and returns ok', async () => {
       const { logout } = await import('../controllers/auth.controller');
@@ -95,22 +114,88 @@ describe('auth controller', () => {
       expect(res.status).toHaveBeenCalledWith(401);
     });
 
-    it('returns 400 if publicKey missing', async () => {
+    it('returns 400 if fields missing', async () => {
       const { uploadPublicKey } = await import('../controllers/auth.controller');
       const res = makeRes();
-      await uploadPublicKey(makeReq({ body: {} }), res);
+      await uploadPublicKey(makeReq({ body: { publicKey: rsa.publicKeyB64 } }), res);
       expect(res.status).toHaveBeenCalledWith(400);
     });
 
-    it('updates user and returns ok', async () => {
+    it('rejects a signature that does not prove possession with 403', async () => {
       const { uploadPublicKey } = await import('../controllers/auth.controller');
       const res = makeRes();
       await uploadPublicKey(
-        makeReq({ body: { publicKey: 'base64-encoded-public-key' } }),
+        makeReq({
+          body: {
+            publicKey: rsa.publicKeyB64,
+            fingerprint: rsa.fingerprint,
+            nonce: 'nonce-123',
+            signature: signNonce('a-different-nonce'),
+          },
+        }),
         res
       );
-      expect(mockDb.set).toHaveBeenCalledWith(expect.objectContaining({ publicKey: 'base64-encoded-public-key' }));
-      expect(res.json).toHaveBeenCalledWith({ ok: true });
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('accepts a valid signature and persists fingerprint', async () => {
+      const { uploadPublicKey } = await import('../controllers/auth.controller');
+      const res = makeRes();
+      const nonce = 'nonce-456';
+      await uploadPublicKey(
+        makeReq({
+          body: {
+            publicKey: rsa.publicKeyB64,
+            fingerprint: rsa.fingerprint,
+            nonce,
+            signature: signNonce(nonce),
+          },
+        }),
+        res
+      );
+      expect(mockDb.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          publicKey: rsa.publicKeyB64,
+          keyFingerprint: rsa.fingerprint,
+        })
+      );
+      expect(res.json).toHaveBeenCalledWith({ ok: true, fingerprint: rsa.fingerprint });
+    });
+  });
+
+  describe('getKeyStatus', () => {
+    it('returns 401 if no user', async () => {
+      const { getKeyStatus } = await import('../controllers/auth.controller');
+      const res = makeRes();
+      await getKeyStatus(makeReq({ user: undefined }), res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns stored publicKey and fingerprint', async () => {
+      const { getKeyStatus } = await import('../controllers/auth.controller');
+      mockDb.query.users.findFirst.mockResolvedValueOnce({
+        id: 'user-1',
+        publicKey: rsa.publicKeyB64,
+        keyFingerprint: rsa.fingerprint,
+      });
+      const res = makeRes();
+      await getKeyStatus(makeReq(), res);
+      expect(res.json).toHaveBeenCalledWith({
+        publicKey: rsa.publicKeyB64,
+        fingerprint: rsa.fingerprint,
+      });
+    });
+
+    it('returns nulls when no key is stored', async () => {
+      const { getKeyStatus } = await import('../controllers/auth.controller');
+      mockDb.query.users.findFirst.mockResolvedValueOnce({
+        id: 'user-1',
+        publicKey: null,
+        keyFingerprint: null,
+      });
+      const res = makeRes();
+      await getKeyStatus(makeReq(), res);
+      expect(res.json).toHaveBeenCalledWith({ publicKey: null, fingerprint: null });
     });
   });
 });

@@ -27,6 +27,7 @@ export const users = pgTable('user', {
   displayName: text('displayName'),
   avatarUrl: text('avatarUrl'),
   publicKey: text('publicKey'),
+  keyFingerprint: text('keyFingerprint'),
   fcmToken: text('fcmToken'),
   lastSeenAt: timestamp('lastSeenAt', { mode: 'date' }).defaultNow(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
@@ -91,6 +92,7 @@ export const messages = pgTable(
     content: text('content'),
     encryptedContent: text('encryptedContent'),
     encryptedContentForSender: text('encryptedContentForSender'),
+    senderKeyFingerprint: text('senderKeyFingerprint'),
     read: boolean('read').default(false).notNull(),
     reaction: text('reaction'),
     reactedByUserId: text('reactedByUserId').references(() => users.id, {

@@ -112,4 +112,79 @@ describe('crypto module', () => {
     expect(result).toBeTruthy();
     expect(typeof result).toBe('string');
   });
+
+  it('hybrid round-trip: long message encrypts and decrypts without DataError', async () => {
+    const { generateKeyPair, storeKeyPair, encryptMessage, decryptMessage } = await import('./crypto');
+
+    const { publicKey, privateKey } = await generateKeyPair();
+    storeKeyPair(publicKey, privateKey);
+
+    const original = 'x'.repeat(2000);
+    const envelope = await encryptMessage(publicKey, original);
+    expect(envelope).toBeTruthy();
+    expect(envelope.startsWith('{"v":')).toBe(true);
+
+    const decrypted = await decryptMessage(envelope);
+    expect(decrypted).toBe(original);
+  });
+
+  it('hybrid round-trip: returns original text', async () => {
+    const { generateKeyPair, storeKeyPair, encryptMessage, decryptMessage } = await import('./crypto');
+
+    const { publicKey, privateKey } = await generateKeyPair();
+    storeKeyPair(publicKey, privateKey);
+
+    const original = 'A hybrid-encrypted message over 190 bytes: '.padEnd(250, 'z');
+    const decrypted = await decryptMessage(await encryptMessage(publicKey, original));
+    expect(decrypted).toBe(original);
+  });
+
+  it('legacy round-trip: raw RSA-OAEP ciphertext still decrypts', async () => {
+    const { generateKeyPair, storeKeyPair, decryptMessage } = await import('./crypto');
+
+    const { publicKey, privateKey } = await generateKeyPair();
+    storeKeyPair(publicKey, privateKey);
+
+    const original = 'Legacy raw RSA-OAEP message';
+    const ciphertext = await legacyRsaEncrypt(publicKey, original);
+    expect(ciphertext).toBeTruthy();
+    expect(ciphertext.startsWith('{"v":')).toBe(false);
+
+    const decrypted = await decryptMessage(ciphertext);
+    expect(decrypted).toBe(original);
+  });
 });
+
+async function legacyRsaEncrypt(publicKeyBase64: string, plaintext: string): Promise<string> {
+  const pub = await crypto.subtle.importKey(
+    'spki',
+    base64ToArrayBuffer(publicKeyBase64),
+    { name: 'RSA-OAEP', hash: 'SHA-256' },
+    false,
+    ['encrypt']
+  );
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'RSA-OAEP' },
+    pub,
+    new TextEncoder().encode(plaintext)
+  );
+  return arrayBufferToBase64(ciphertext);
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}

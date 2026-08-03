@@ -318,19 +318,65 @@ export const updateFcmToken = asyncHandler(async (req: AuthRequest, res: Respons
 });
 
 export const uploadPublicKey = asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { publicKey } = req.body as { publicKey?: string };
+  const { publicKey, fingerprint, nonce, signature } = req.body as {
+    publicKey?: string;
+    fingerprint?: string;
+    nonce?: string;
+    signature?: string;
+  };
   if (!req.user?.id) return sendError(res, 'Unauthorized', 401);
-  if (!publicKey || typeof publicKey !== 'string') {
-    return sendError(res, 'publicKey is required', 400);
+
+  if ([publicKey, fingerprint, nonce, signature].some((v) => typeof v !== 'string' || !v)) {
+    return sendError(res, 'publicKey, fingerprint, nonce, and signature are required', 400);
+  }
+
+  let publicKeyObj: crypto.KeyObject;
+  try {
+    publicKeyObj = crypto.createPublicKey({
+      key: Buffer.from(publicKey as string, 'base64'),
+      format: 'der',
+      type: 'spki',
+    });
+  } catch {
+    return sendError(res, 'Invalid public key', 400);
+  }
+
+  const signatureBuffer = Buffer.from(signature as string, 'base64');
+  let signatureValid = false;
+  try {
+    signatureValid = crypto.verify(
+      'sha256',
+      Buffer.from(nonce as string),
+      publicKeyObj,
+      signatureBuffer
+    );
+  } catch {
+    return sendError(res, 'Invalid signature', 403);
+  }
+
+  if (!signatureValid) {
+    return sendError(res, 'Signature does not prove possession of the private key', 403);
   }
 
   const db = getDb();
   await db
     .update(users)
-    .set({ publicKey, updatedAt: new Date() })
+    .set({ publicKey, keyFingerprint: fingerprint, updatedAt: new Date() })
     .where(eq(users.id, req.user.id));
 
-  return sendSuccess(res, { ok: true });
+  return sendSuccess(res, { ok: true, fingerprint });
+});
+
+export const getKeyStatus = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (!req.user?.id) return sendError(res, 'Unauthorized', 401);
+
+  const db = getDb();
+  const row = await db.query.users.findFirst({ where: eq(users.id, req.user.id) });
+
+  return sendSuccess(res, {
+    publicKey: row?.publicKey ?? null,
+    fingerprint: row?.keyFingerprint ?? null,
+  });
 });
 
 export const searchUsers = asyncHandler(async (req: AuthRequest, res: Response) => {

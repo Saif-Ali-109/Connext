@@ -7,6 +7,7 @@ import {
   updateUsername,
   updateFcmToken,
   uploadPublicKey,
+  getKeyStatus,
   getUserByQuery,
   updatePassword,
   sendVerificationEmail,
@@ -31,6 +32,7 @@ router.post('/username', authenticateToken, updateUsername);
 router.post('/update-password', authenticateToken, passwordChange, updatePassword);
 router.post('/fcm-token', authenticateToken, updateFcmToken);
 router.post('/public-key', authenticateToken, uploadPublicKey);
+router.get('/key-status', authenticateToken, getKeyStatus);
 router.get('/user/:query', authenticateToken, standard, getUserByQuery);
 router.get('/search', authenticateToken, standard, getUserByQuery);
 router.post('/send-verification', authenticateToken, sendVerification, sendVerificationEmail);
