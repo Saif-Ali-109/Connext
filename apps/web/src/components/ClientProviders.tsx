@@ -1,8 +1,8 @@
 'use client';
 
 import { SessionProvider, useSession } from 'next-auth/react';
-import React, { ReactNode, createContext, useContext, useCallback, useEffect, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import React, { ReactNode, Suspense, createContext, useContext, useCallback, useEffect, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { getApiBaseUrl } from '../lib/api';
 import { ToastProvider } from './ui/Toast';
@@ -56,6 +56,7 @@ function BridgeSession({ children }: { children: ReactNode }) {
   const { data: session, status } = useSession();
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [ready, setReady] = useState(false);
   const [settled, setSettled] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,9 +81,14 @@ function BridgeSession({ children }: { children: ReactNode }) {
   // without waiting for the bridge flow. This saves 2-5 seconds on redirects.
   useEffect(() => {
     if (status === 'authenticated' && pathname === '/login') {
-      router.replace('/dashboard');
+      const rawCallbackUrl = searchParams.get('callbackUrl');
+      const callbackUrl =
+        typeof rawCallbackUrl === 'string' && rawCallbackUrl.startsWith('/') && !rawCallbackUrl.startsWith('//')
+          ? rawCallbackUrl
+          : '/dashboard';
+      router.replace(callbackUrl);
     }
-  }, [status, pathname, router]);
+  }, [status, pathname, router, searchParams]);
 
   // Establish the Express token cookie via the bridge, then load the server profile.
   useEffect(() => {
@@ -206,12 +212,14 @@ function BridgeSession({ children }: { children: ReactNode }) {
 export default function ClientProviders({ children }: { children: ReactNode }) {
   return (
     <SessionProvider>
-      <BridgeSession>
-        <ToastProvider>
-          <NotificationManager />
-          {children}
-        </ToastProvider>
-      </BridgeSession>
+      <Suspense>
+        <BridgeSession>
+          <ToastProvider>
+            <NotificationManager />
+            {children}
+          </ToastProvider>
+        </BridgeSession>
+      </Suspense>
     </SessionProvider>
   );
 }

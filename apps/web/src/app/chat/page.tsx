@@ -23,9 +23,10 @@ function ChatIndexView() {
       >
         <MessageSquare className="w-10 h-10 text-accent" />
       </motion.div>
-      <h2 className="text-2xl font-bold mb-3 text-text-primary">Your Encrypted Conversations</h2>
+      <h2 className="text-2xl font-bold mb-3 text-text-primary">Your Conversations</h2>
       <p className="text-text-secondary max-w-sm">
-        Select a contact from the list to start a secure, end-to-end encrypted chat session.
+        Select a contact from the list to start a secure chat. Messages are end-to-end
+        encrypted when both parties have encryption keys.
       </p>
     </motion.div>
   );

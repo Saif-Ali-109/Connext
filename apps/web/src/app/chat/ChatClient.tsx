@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
-import { ArrowLeft, Check, CheckCheck, Loader2, Paperclip, Send, SmilePlus } from 'lucide-react';
+import { ArrowLeft, Check, CheckCheck, Loader2, Lock, Paperclip, Send, ShieldAlert, SmilePlus } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
@@ -748,9 +748,19 @@ export default function ChatClient() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="text-xs text-text-muted truncate max-w-xs"
+                className="text-xs text-text-muted truncate max-w-xs flex items-center gap-1"
               >
-                {roomId}
+                {peerPublicKey ? (
+                  <>
+                    <Lock className="w-3 h-3" />
+                    <span>End-to-end encrypted</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldAlert className="w-3 h-3 text-amber-500" />
+                    <span>Not end-to-end encrypted</span>
+                  </>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

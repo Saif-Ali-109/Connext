@@ -7,6 +7,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { io, Socket } from 'socket.io-client';
 import { getRoomId } from '../../lib/roomId';
 import { getApiBaseUrl } from '../../lib/api';
+import { copyTextToClipboard } from '../../lib/clipboard';
 import { useToast } from '../../components/ui/Toast';
 import {
   IconField,
@@ -300,7 +301,12 @@ export default function ChatsSection({ contacts, unreadCounts, userId, busy, onR
       if (!res.ok) throw new Error(data.error || 'Failed');
       const url = `${window.location.origin}/invite?token=${data.invite.token}`;
       setInviteUrl(url);
-      await navigator.clipboard.writeText(url);
+      const ok = await copyTextToClipboard(url);
+      if (ok) {
+        toast.success('Invite link copied');
+      } else {
+        toast.info('Invite link created — copy it below');
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to create invite');
     }

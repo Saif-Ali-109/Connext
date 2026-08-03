@@ -1,8 +1,8 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useState, Suspense } from 'react';
 import { signIn } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AtSign, KeyRound, Loader2, Mail, ShieldCheck, UserCircle2 } from 'lucide-react';
 import PasswordInput from '@/components/PasswordInput';
@@ -69,8 +69,14 @@ function PrimaryButton({
   );
 }
 
-export default function LoginPage() {
+function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawCallbackUrl = searchParams.get('callbackUrl');
+  const callbackUrl =
+    typeof rawCallbackUrl === 'string' && rawCallbackUrl.startsWith('/') && !rawCallbackUrl.startsWith('//')
+      ? rawCallbackUrl
+      : '/dashboard';
   const [screen, setScreen] = useState<Screen>('signin');
   const [codeGoal, setCodeGoal] = useState<CodeGoal>('signup');
   const [identifier, setIdentifier] = useState('');
@@ -109,7 +115,7 @@ export default function LoginPage() {
         setError('Incorrect email/username or password.');
         return;
       }
-      router.replace('/dashboard');
+      router.replace(callbackUrl);
     } catch {
       setError('Could not sign in. Please try again.');
     } finally {
@@ -157,7 +163,7 @@ export default function LoginPage() {
         setError('Account created, but sign-in failed. Try signing in with your username.');
         return;
       }
-      router.replace('/dashboard');
+      router.replace(callbackUrl);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the account.');
     } finally {
@@ -207,7 +213,12 @@ export default function LoginPage() {
     const params = new URLSearchParams({
       token,
       email: email.trim(),
-      callbackUrl: codeGoal === 'recovery' ? '/reset-password' : '/onboarding',
+      callbackUrl:
+        codeGoal === 'recovery'
+          ? '/reset-password'
+          : callbackUrl && callbackUrl !== '/dashboard'
+            ? callbackUrl
+            : '/onboarding',
     });
     window.location.href = `/api/auth/callback/nodemailer?${params.toString()}`;
   }
@@ -268,7 +279,7 @@ export default function LoginPage() {
 
         <button
           type="button"
-          onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
+          onClick={() => signIn('google', { callbackUrl })}
           className="flex w-full items-center justify-center gap-3 rounded-xl bg-white py-3 text-sm font-medium text-zinc-900 transition hover:bg-zinc-100 hover:shadow-lg hover:shadow-white/10"
         >
           <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden>
@@ -477,5 +488,13 @@ export default function LoginPage() {
         </AnimatePresence>
       </motion.div>
     </main>
+  );
+}
+
+export default function LoginPageWrapper() {
+  return (
+    <Suspense>
+      <LoginPage />
+    </Suspense>
   );
 }
