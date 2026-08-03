@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
 import { ArrowLeft, Check, CheckCheck, Loader2, Lock, Paperclip, Send, ShieldAlert, SmilePlus, Trash2 } from 'lucide-react';
@@ -102,6 +102,7 @@ const MAX_MSG_LENGTH = 5000;
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const TYPING_STOP_MS = 2000;
 const TYPING_TIMEOUT_MS = 4000;
+const PEER_KEY_TTL_MS = 15_000;
 
 function parseAttachment(text: string): FileAttachment | null {
   try {
@@ -135,6 +136,8 @@ export default function ChatClient() {
   const [loading, setLoading] = useState(true);
   const [peerLabel, setPeerLabel] = useState('Chat');
   const [peerPublicKey, setPeerPublicKey] = useState<string | null>(null);
+  const peerPublicKeyRef = useRef<string | null>(null);
+  const peerKeyCacheRef = useRef<{ key: string | null; fetchedAt: number }>({ key: null, fetchedAt: 0 });
   const [keyStatus, setKeyStatus] = useState<'checking' | 'ok' | 'mismatch' | 'unavailable'>('checking');
   const [serverFingerprint, setServerFingerprint] = useState<string | null>(null);
   const ownPublicKeyRef = useRef<string | null>(null);
@@ -247,8 +250,8 @@ export default function ChatClient() {
     void loadMessages(pageRef.current + 1, true);
   }, [loadingOlder, loadMessages]);
 
-  const loadPeer = useCallback(async () => {
-    if (!otherUserId) return;
+  const loadPeer = useCallback(async (): Promise<string | null> => {
+    if (!otherUserId) return null;
     try {
       const res = await fetch(`${SERVER_URL}/auth/user/${otherUserId}`, {
         credentials: 'include',
@@ -256,12 +259,29 @@ export default function ChatClient() {
       const data = await res.json();
       if (res.ok && data.id) {
         setPeerLabel(data.displayName || data.username || data.email || 'Chat');
-        setPeerPublicKey(data.publicKey ?? null);
+        const key = data.publicKey ?? null;
+        peerPublicKeyRef.current = key;
+        setPeerPublicKey(key);
+        peerKeyCacheRef.current = { key, fetchedAt: Date.now() };
+        return key;
       }
     } catch {
       // ignore
     }
+    return peerKeyCacheRef.current.key;
   }, [otherUserId]);
+
+  // Return the recipient's current public key, refetching from the server when
+  // the cached copy is stale. `/auth/user/:id` is rate-limited (30/min), so we
+  // reuse a recent fetch; the `key_updated` socket event forces an instant
+  // refetch after a rotation, keeping the staleness window tiny.
+  const getFreshPeerKey = useCallback(async (): Promise<string | null> => {
+    const cache = peerKeyCacheRef.current;
+    if (cache.key !== null && Date.now() - cache.fetchedAt < PEER_KEY_TTL_MS) {
+      return cache.key;
+    }
+    return loadPeer();
+  }, [loadPeer]);
 
   // Ensure current user has E2EE keys; detect mismatch with server-stored key
   useEffect(() => {
@@ -545,6 +565,12 @@ export default function ChatClient() {
       socket.on('user_offline', (data: { userId?: string }) => {
         if (data.userId === otherUserId) setPeerOnline(false);
       });
+
+      socket.on('key_updated', (data: { userId?: string }) => {
+        if (data.userId && data.userId !== otherUserId) return;
+        void loadPeer();
+        toast.info('Recipient updated their encryption key — refreshing');
+      });
     })();
 
     return () => {
@@ -555,7 +581,7 @@ export default function ChatClient() {
       socketRef.current?.disconnect();
       socketRef.current = null;
     };
-  }, [ready, userId, otherUserId, roomId, applyReaction]);
+  }, [ready, userId, otherUserId, roomId, applyReaction, loadPeer, toast]);
 
   useEffect(() => {
     const socket = socketRef.current;
@@ -614,11 +640,18 @@ export default function ChatClient() {
       toast.error(`Message too long (max ${MAX_MSG_LENGTH} characters)`);
       return;
     }
-    if (!peerPublicKey && !attachment) {
+    setSending(true);
+
+    // Get the recipient's CURRENT key before encrypting — they may have
+    // re-synced/rotated their key since this page loaded. Encrypting with a
+    // stale key would make every new message undecryptable for them.
+    const peerKeyForSend = await getFreshPeerKey();
+
+    if (!peerKeyForSend && !attachment) {
       toast.error('Can\'t send — this chat isn\'t end-to-end encrypted. Ask the recipient to set up their key.');
+      setSending(false);
       return;
     }
-    setSending(true);
     if (!attachment) setDraft('');
     stopTyping();
 
@@ -638,9 +671,9 @@ export default function ChatClient() {
 
     let encryptedContent: string | undefined;
     let encryptedContentForSender: string | undefined;
-    if (peerPublicKey) {
+    if (peerKeyForSend) {
       try {
-        encryptedContent = await encryptMessage(peerPublicKey, text);
+        encryptedContent = await encryptMessage(peerKeyForSend, text);
         if (ownPublicKeyRef.current) {
           encryptedContentForSender = await encryptMessage(ownPublicKeyRef.current, text);
         }
@@ -890,7 +923,11 @@ export default function ChatClient() {
               ) : m.decryptionFailed ? (
                 <span className="inline-flex items-center gap-1.5 italic text-text-muted">
                   <ShieldAlert className="w-4 h-4 shrink-0" />
-                  Message encrypted with a previous key — can&apos;t be decrypted
+                  <span>
+                    {m.sender === 'other'
+                      ? 'Message encrypted with a previous key — can\'t be decrypted. The sender may be using an outdated key — ask them to refresh.'
+                      : 'Message encrypted with a previous key — can\'t be decrypted'}
+                  </span>
                 </span>
               ) : (
                 m.text

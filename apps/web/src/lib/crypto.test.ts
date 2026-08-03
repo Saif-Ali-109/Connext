@@ -113,6 +113,33 @@ describe('crypto module', () => {
     expect(typeof result).toBe('string');
   });
 
+  it('ensureKeys regenerates a full pair when the private key is missing', async () => {
+    const { ensureKeys, storeKeyPair, getStoredPublicKey, getStoredPrivateKey, encryptMessage, decryptMessage } =
+      await import('./crypto');
+    const { generateKeyPair } = await import('./crypto');
+
+    const { publicKey: stalePublic } = await generateKeyPair();
+    storeKeyPair(stalePublic, '');
+
+    const result = await ensureKeys('http://localhost:4001');
+    expect(result).toBeTruthy();
+    expect(getStoredPrivateKey()).toBeTruthy();
+    expect(getStoredPublicKey()).not.toBe(stalePublic);
+
+    const ciphertext = await encryptMessage(result, 'regenerated pair works');
+    expect(await decryptMessage(ciphertext)).toBe('regenerated pair works');
+  });
+
+  it('ensureKeys returns existing key when both keys are present', async () => {
+    const { ensureKeys, storeKeyPair, getStoredPublicKey } = await import('./crypto');
+    const { generateKeyPair } = await import('./crypto');
+    const { publicKey, privateKey } = await generateKeyPair();
+    storeKeyPair(publicKey, privateKey);
+    const result = await ensureKeys('http://localhost:4001');
+    expect(result).toBe(publicKey);
+    expect(getStoredPublicKey()).toBe(publicKey);
+  });
+
   it('hybrid round-trip: long message encrypts and decrypts without DataError', async () => {
     const { generateKeyPair, storeKeyPair, encryptMessage, decryptMessage } = await import('./crypto');
 

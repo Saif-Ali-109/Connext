@@ -46,12 +46,15 @@ function makeRes(): Response {
 }
 
 describe('auth controller', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     // Re-bind chain methods after clear
     for (const m of ['select', 'from', 'where', 'insert', 'values', 'returning', 'update', 'set', 'delete', 'orderBy', 'limit', 'offset']) {
       mockDb[m].mockReturnValue(mockDb);
     }
+    // Reset the module-level key-update notifier so tests don't leak into each other.
+    const { setKeyUpdateNotifier } = await import('../controllers/auth.controller');
+    setKeyUpdateNotifier(undefined);
   });
 
   let rsa: { publicKeyB64: string; privateKey: crypto.KeyObject; fingerprint: string };
@@ -159,6 +162,52 @@ describe('auth controller', () => {
           keyFingerprint: rsa.fingerprint,
         })
       );
+      expect(res.json).toHaveBeenCalledWith({ ok: true, fingerprint: rsa.fingerprint });
+    });
+
+    it('notifies contacts after a successful key rotation', async () => {
+      const { uploadPublicKey, setKeyUpdateNotifier } = await import('../controllers/auth.controller');
+      const notify = vi.fn().mockResolvedValue(undefined);
+      setKeyUpdateNotifier(notify);
+      const res = makeRes();
+      const nonce = 'nonce-789';
+      await uploadPublicKey(
+        makeReq({
+          body: {
+            publicKey: rsa.publicKeyB64,
+            fingerprint: rsa.fingerprint,
+            nonce,
+            signature: signNonce(nonce),
+          },
+        }),
+        res
+      );
+      expect(notify).toHaveBeenCalledWith('user-1');
+      expect(res.json).toHaveBeenCalledWith({ ok: true, fingerprint: rsa.fingerprint });
+    });
+
+    it('skips notifying contacts when the key is unchanged (idempotent re-upload)', async () => {
+      const { uploadPublicKey, setKeyUpdateNotifier } = await import('../controllers/auth.controller');
+      const notify = vi.fn().mockResolvedValue(undefined);
+      setKeyUpdateNotifier(notify);
+      mockDb.query.users.findFirst.mockResolvedValueOnce({
+        id: 'user-1',
+        keyFingerprint: rsa.fingerprint,
+      });
+      const res = makeRes();
+      const nonce = 'nonce-111';
+      await uploadPublicKey(
+        makeReq({
+          body: {
+            publicKey: rsa.publicKeyB64,
+            fingerprint: rsa.fingerprint,
+            nonce,
+            signature: signNonce(nonce),
+          },
+        }),
+        res
+      );
+      expect(notify).not.toHaveBeenCalled();
       expect(res.json).toHaveBeenCalledWith({ ok: true, fingerprint: rsa.fingerprint });
     });
   });

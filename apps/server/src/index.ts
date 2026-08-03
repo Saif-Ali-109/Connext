@@ -16,6 +16,7 @@ import chatRoutes from './routes/chat';
 import mediaRoutes from './routes/media';
 import notificationRoutes from './routes/notifications';
 import { setOnlineSocketsRef } from './controllers/chat.controller';
+import { setKeyUpdateNotifier } from './controllers/auth.controller';
 import { runMigrations, enablePgTrgm } from '@connext/db';
 import { DATABASE_URL, JWT_SECRET, PORT, connectDB, getDb, ALLOWED_ORIGINS } from './lib/constants';
 import { logger } from './lib/logger';
@@ -138,6 +139,10 @@ io.use((socket, next) => {
 app.use(errorHandler);
 
 const deps = createSocketDeps(onlineSocketsByUserId, messageTimestamps);
+
+setKeyUpdateNotifier(async (userId: string) => {
+  await deps.emitToContacts(io, userId, 'key_updated', { userId });
+});
 
 io.on('connection', (socket) => {
   registerPresenceHandlers(io, socket, deps);

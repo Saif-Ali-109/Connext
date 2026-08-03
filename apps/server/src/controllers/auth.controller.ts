@@ -317,6 +317,12 @@ export const updateFcmToken = asyncHandler(async (req: AuthRequest, res: Respons
   return sendSuccess(res, { ok: true });
 });
 
+let notifyKeyUpdateRef: ((userId: string) => Promise<void>) | undefined;
+
+export const setKeyUpdateNotifier = (fn?: (userId: string) => Promise<void>) => {
+  notifyKeyUpdateRef = fn;
+};
+
 export const uploadPublicKey = asyncHandler(async (req: AuthRequest, res: Response) => {
   const { publicKey, fingerprint, nonce, signature } = req.body as {
     publicKey?: string;
@@ -359,10 +365,18 @@ export const uploadPublicKey = asyncHandler(async (req: AuthRequest, res: Respon
   }
 
   const db = getDb();
+  const current = await db.query.users.findFirst({ where: eq(users.id, req.user.id) });
+
   await db
     .update(users)
     .set({ publicKey, keyFingerprint: fingerprint, updatedAt: new Date() })
     .where(eq(users.id, req.user.id));
+
+  if (current?.keyFingerprint !== fingerprint) {
+    // Fire-and-forget: contacts will pick up the new key on their next send
+    // even if this broadcast fails.
+    void notifyKeyUpdateRef?.(req.user.id)?.catch(() => {});
+  }
 
   return sendSuccess(res, { ok: true, fingerprint });
 });

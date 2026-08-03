@@ -56,19 +56,18 @@ export function hasKeys(): boolean {
 }
 
 export async function ensureKeys(serverUrl: string): Promise<string> {
-  const existing = getStoredPublicKey();
-  if (existing) return existing;
+  const existingPublic = getStoredPublicKey();
+  const existingPrivate = getStoredPrivateKey();
+  if (existingPublic && existingPrivate) return existingPublic;
 
+  // A half-pair (public key present but private key missing) is unrecoverable —
+  // every inbound message was encrypted to it. Regenerate BOTH keys so the new
+  // pair is usable, and upload with proof-of-possession so the server stores it.
   const { publicKey, privateKey } = await generateKeyPair();
   storeKeyPair(publicKey, privateKey);
 
   try {
-    await fetch(`${serverUrl}/auth/public-key`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ publicKey }),
-    });
+    await uploadKeyWithProof(serverUrl);
   } catch {
     // non-blocking: keys are stored locally, upload can retry later
   }
