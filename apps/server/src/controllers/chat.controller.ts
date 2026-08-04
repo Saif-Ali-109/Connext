@@ -718,6 +718,96 @@ export const disconnectChat = asyncHandler(async (req: AuthRequest, res: Respons
   return sendSuccess(res, { message: 'Disconnected successfully' });
 });
 
+export const getConnectionStatus = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { roomId } = req.params;
+  const authenticatedUserId = getAuthenticatedUserId(req);
+
+  if (!authenticatedUserId) {
+    return sendError(res, 'Unauthorized: No active session', 401);
+  }
+
+  if (!roomId || !isParticipantRoomId(roomId, authenticatedUserId)) {
+    return sendError(res, 'Invalid Room ID', 400);
+  }
+
+  const otherId = roomId.split('_').find((p) => p !== authenticatedUserId);
+  if (!otherId) {
+    return sendError(res, 'Invalid Room ID', 400);
+  }
+
+  const db = getDb();
+  const row = await db.query.chatRequests.findFirst({
+    where: or(
+      and(
+        eq(chatRequests.fromUserId, authenticatedUserId),
+        eq(chatRequests.toUserId, otherId)
+      ),
+      and(
+        eq(chatRequests.fromUserId, otherId),
+        eq(chatRequests.toUserId, authenticatedUserId)
+      )
+    ),
+  });
+
+  return sendSuccess(res, {
+    connection: row ? { status: row.status, hiddenBy: row.hiddenBy ?? [] } : null,
+  });
+});
+
+export const reconnectChat = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { contactUserId } = req.body as { contactUserId?: string };
+  const authenticatedUserId = getAuthenticatedUserId(req);
+
+  if (!authenticatedUserId) {
+    return sendError(res, 'Unauthorized: No active session', 401);
+  }
+  if (!contactUserId) {
+    return sendError(res, 'Contact user ID is required', 400);
+  }
+
+  const db = getDb();
+  const row = await db.query.chatRequests.findFirst({
+    where: or(
+      and(
+        eq(chatRequests.fromUserId, authenticatedUserId),
+        eq(chatRequests.toUserId, contactUserId)
+      ),
+      and(
+        eq(chatRequests.fromUserId, contactUserId),
+        eq(chatRequests.toUserId, authenticatedUserId)
+      )
+    ),
+  });
+
+  if (!row) {
+    return sendError(res, 'Connection not found', 404);
+  }
+
+  if (row.status === 'pending') {
+    return sendError(res, 'Request already pending', 400);
+  }
+
+  if (row.status === 'accepted' && (row.hiddenBy ?? []).length === 0) {
+    return sendError(res, 'Connection is already active', 400);
+  }
+
+  invalidateRequestCache(authenticatedUserId, contactUserId);
+
+  const [updated] = await db
+    .update(chatRequests)
+    .set({
+      status: 'pending',
+      fromUserId: authenticatedUserId,
+      toUserId: contactUserId,
+      hiddenBy: [],
+      updatedAt: new Date(),
+    })
+    .where(eq(chatRequests.id, row.id))
+    .returning();
+
+  return sendSuccess(res, { message: 'Reconnect request sent', request: updated });
+});
+
 export const createInvite = asyncHandler(async (req: AuthRequest, res: Response) => {
   const authenticatedUserId = getAuthenticatedUserId(req);
   if (!authenticatedUserId) {

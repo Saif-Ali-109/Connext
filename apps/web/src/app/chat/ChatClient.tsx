@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { io, Socket } from 'socket.io-client';
-import { ArrowLeft, Check, CheckCheck, Loader2, Lock, Paperclip, Send, ShieldAlert, SmilePlus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, CheckCheck, Link2, Loader2, Lock, Paperclip, Send, ShieldAlert, SmilePlus, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession } from 'next-auth/react';
 import { useBridge } from '../../components/ClientProviders';
@@ -148,6 +148,7 @@ export default function ChatClient() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
   const [peerOnline, setPeerOnline] = useState(false);
+  const [connection, setConnection] = useState<{ status: string; hiddenBy: string[] } | null>(null);
   const [uploading, setUploading] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -164,6 +165,8 @@ export default function ChatClient() {
   const prevListRef = useRef<{ count: number; oldestId: string | null }>({ count: 0, oldestId: null });
 
   const otherUserId = userId ? otherUserIdFromRoom(roomId, userId) : null;
+  const isRemoved = !!connection && connection.hiddenBy.length > 0;
+  const isReconnectPending = !!connection && connection.status === 'pending';
 
   useEffect(() => {
     if (status === 'unauthenticated') router.replace('/login');
@@ -270,6 +273,21 @@ export default function ChatClient() {
     return peerKeyCacheRef.current.key;
   }, [otherUserId]);
 
+  const loadConnectionStatus = useCallback(async () => {
+    if (!userId || !roomId) return;
+    try {
+      const res = await fetch(
+        `${SERVER_URL}/chat/connection/${encodeURIComponent(roomId)}`,
+        { credentials: 'include' }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load connection status');
+      setConnection(data.connection ?? null);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [userId, roomId]);
+
   // Return the recipient's current public key, refetching from the server when
   // the cached copy is stale. `/auth/user/:id` is rate-limited (30/min), so we
   // reuse a recent fetch; the `key_updated` socket event forces an instant
@@ -331,6 +349,26 @@ export default function ChatClient() {
       toast.error(e instanceof Error ? e.message : 'Failed to clear chat');
     }
   }, [roomId, loadMessages, toast]);
+
+  const reconnect = useCallback(async () => {
+    if (!window.confirm('Re-send a connection request to this person?')) return;
+    if (!otherUserId) return;
+    try {
+      const res = await fetch(`${SERVER_URL}/chat/reconnect`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactUserId: otherUserId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to send reconnect request');
+      await loadConnectionStatus();
+      toast.success('Reconnect request sent');
+    } catch (e) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : 'Failed to send reconnect request');
+    }
+  }, [otherUserId, loadConnectionStatus, toast]);
 
   useEffect(() => {
     if (!otherUserId) return;
@@ -430,8 +468,9 @@ export default function ChatClient() {
     if (ready && userId) {
       void loadMessages(1, false);
       void loadPeer();
+      void loadConnectionStatus();
     }
-  }, [ready, userId, loadMessages, loadPeer]);
+  }, [ready, userId, loadMessages, loadPeer, loadConnectionStatus]);
 
   useEffect(() => {
     if (!ready || !userId || !otherUserId) return;
@@ -873,6 +912,28 @@ export default function ChatClient() {
             )}
           </AnimatePresence>
         </div>
+        {(isRemoved || isReconnectPending) &&
+          (isReconnectPending ? (
+            <button
+              type="button"
+              disabled
+              title="Request sent"
+              className="p-1.5 rounded-lg text-text-secondary opacity-50 cursor-not-allowed"
+            >
+              <Check className="w-4 h-4" />
+              <span className="text-xs">Request sent</span>
+            </button>
+          ) : (
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.9 }}
+              onClick={() => void reconnect()}
+              title="Reconnect"
+              className="p-1.5 rounded-lg text-text-secondary transition hover:text-accent"
+            >
+              <Link2 className="w-4 h-4" />
+            </motion.button>
+          ))}
         <button
           type="button"
           onClick={() => void clearChat()}
@@ -1007,6 +1068,13 @@ export default function ChatClient() {
           void send();
         }}
       >
+        {isRemoved && (
+          <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+            {connection.hiddenBy.includes(userId ?? '')
+              ? 'You removed this contact. Send a reconnect request.'
+              : 'This contact removed you. Send a reconnect request to reconnect.'}
+          </div>
+        )}
         {!peerPublicKey && (
           <div className="flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
             <ShieldAlert className="h-4 w-4 shrink-0" />

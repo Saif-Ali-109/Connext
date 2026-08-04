@@ -13,6 +13,8 @@ import {
   getUnreadMessageCounts,
   updateContactName,
   disconnectChat,
+  getConnectionStatus,
+  reconnectChat,
   getOnlineStatus,
   createInvite,
   acceptInvite,
@@ -40,6 +42,8 @@ router.post('/react', authenticateToken, reactLimiter, toggleReaction);
 router.get('/unreadCounts', authenticateToken, getUnreadMessageCounts);
 router.put('/contact-name', authenticateToken, standard, updateContactName);
 router.post('/disconnect', authenticateToken, disconnectChat);
+router.get('/connection/:roomId', authenticateToken, getConnectionStatus);
+router.post('/reconnect', authenticateToken, standard, reconnectChat);
 router.get('/online-status/:userId', authenticateToken, getOnlineStatus);
 router.get('/search', authenticateToken, standard, searchMessages);
 router.post('/invite', authenticateToken, inviteLimiter, createInvite);

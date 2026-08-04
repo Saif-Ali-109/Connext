@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.middleware';
-import { messages, chatClears } from '@connext/db';
+import { messages, chatClears, chatRequests } from '@connext/db';
 
 function chain() {
   const c: any = {};
@@ -604,6 +604,202 @@ describe('chat controller', () => {
           totalCount: 1,
         })
       );
+    });
+  });
+
+  describe('getConnectionStatus', () => {
+    it('returns 401 if no authenticated user', async () => {
+      const { getConnectionStatus } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await getConnectionStatus(makeReq({ user: undefined, params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 400 for a non-participant room', async () => {
+      const { getConnectionStatus } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await getConnectionStatus(makeReq({ params: { roomId: 'user-9_user-3' } }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('returns 200 with the connection status when a row exists', async () => {
+      const { getConnectionStatus } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-2',
+        toUserId: 'user-1',
+        status: 'accepted',
+        hiddenBy: ['user-1'],
+      });
+      const res = makeRes();
+      await getConnectionStatus(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connection: { status: 'accepted', hiddenBy: ['user-1'] },
+        })
+      );
+    });
+
+    it('returns 200 with connection null when no row exists', async () => {
+      const { getConnectionStatus } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce(null);
+      const res = makeRes();
+      await getConnectionStatus(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ connection: null }));
+    });
+  });
+
+  describe('reconnectChat', () => {
+    function mockSelectChain() {
+      mockDb.select.mockReturnValueOnce({
+        from: vi.fn().mockReturnValueOnce({
+          where: vi.fn().mockResolvedValueOnce([]),
+        }),
+      });
+    }
+
+    it('returns 401 if no authenticated user', async () => {
+      const { reconnectChat } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await reconnectChat(makeReq({ user: undefined, body: { contactUserId: 'user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 400 if contactUserId is missing', async () => {
+      const { reconnectChat } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await reconnectChat(makeReq({ body: {} }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('returns 404 when no connection row exists', async () => {
+      const { reconnectChat } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce(null);
+      const res = makeRes();
+      await reconnectChat(makeReq({ body: { contactUserId: 'user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when the request is already pending', async () => {
+      const { reconnectChat } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-2',
+        toUserId: 'user-1',
+        status: 'pending',
+        hiddenBy: [],
+      });
+      const res = makeRes();
+      await reconnectChat(makeReq({ body: { contactUserId: 'user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when the connection is already active', async () => {
+      const { reconnectChat } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+        hiddenBy: [],
+      });
+      const res = makeRes();
+      await reconnectChat(makeReq({ body: { contactUserId: 'user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('re-opens the connection as pending when the remover reconnects and invalidates the cache', async () => {
+      const { reconnectChat, getRequests } = await import('../controllers/chat.controller');
+
+      mockSelectChain();
+      const res0 = makeRes();
+      await getRequests(makeReq(), res0);
+      expect(res0.status).toHaveBeenCalledWith(200);
+
+      const row = {
+        id: 'req-1',
+        fromUserId: 'user-2',
+        toUserId: 'user-1',
+        status: 'accepted',
+        hiddenBy: ['user-1'],
+      };
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce(row);
+      let setArg: Record<string, unknown> | undefined;
+      mockDb.set.mockImplementationOnce((v: Record<string, unknown>) => {
+        setArg = v;
+        return mockDb;
+      });
+      mockDb.returning.mockResolvedValueOnce([{ ...row, status: 'pending', hiddenBy: [], fromUserId: 'user-1', toUserId: 'user-2' }]);
+      const res = makeRes();
+      await reconnectChat(makeReq({ body: { contactUserId: 'user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Reconnect request sent',
+          request: expect.objectContaining({ status: 'pending', hiddenBy: [] }),
+        })
+      );
+      expect(setArg).toMatchObject({
+        status: 'pending',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        hiddenBy: [],
+        updatedAt: expect.any(Date),
+      });
+
+      mockDb.select.mockClear();
+      mockSelectChain();
+      const res2 = makeRes();
+      await getRequests(makeReq(), res2);
+      expect(mockDb.select).toHaveBeenCalled();
+    });
+
+    it('re-opens the connection as pending when the removed party reconnects', async () => {
+      const { reconnectChat } = await import('../controllers/chat.controller');
+      const row = {
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+        hiddenBy: ['user-2'],
+      };
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce(row);
+      mockDb.returning.mockResolvedValueOnce([{ ...row, status: 'pending', hiddenBy: [], fromUserId: 'user-1', toUserId: 'user-2' }]);
+      const res = makeRes();
+      await reconnectChat(makeReq({ body: { contactUserId: 'user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Reconnect request sent' }));
+      expect(mockDb.update).toHaveBeenCalledWith(chatRequests);
+      expect(mockDb.set).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'pending',
+          fromUserId: 'user-1',
+          toUserId: 'user-2',
+          hiddenBy: [],
+        })
+      );
+    });
+
+    it('re-opens a rejected connection as pending', async () => {
+      const { reconnectChat } = await import('../controllers/chat.controller');
+      const row = {
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'rejected',
+        hiddenBy: [],
+      };
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce(row);
+      mockDb.returning.mockResolvedValueOnce([{ ...row, status: 'pending', hiddenBy: [] }]);
+      const res = makeRes();
+      await reconnectChat(makeReq({ body: { contactUserId: 'user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Reconnect request sent' }));
     });
   });
 });
