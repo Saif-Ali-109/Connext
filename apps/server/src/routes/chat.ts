@@ -6,6 +6,7 @@ import {
   removeRequest,
   getMessages,
   clearChatHistory,
+  clearChatForUser,
   sendMessage,
   toggleReaction,
   searchMessages,
@@ -33,6 +34,7 @@ router.get('/requests', authenticateToken, getRequests);
 router.delete('/request/:requestId', authenticateToken, removeRequest);
 router.get('/messages/:roomId', authenticateToken, getMessages);
 router.delete('/history/:roomId', authenticateToken, clearChatHistory);
+router.post('/clear/:roomId', authenticateToken, clearChatForUser);
 router.post('/send-message', authenticateToken, msgLimiter, sendMessage);
 router.post('/react', authenticateToken, reactLimiter, toggleReaction);
 router.get('/unreadCounts', authenticateToken, getUnreadMessageCounts);

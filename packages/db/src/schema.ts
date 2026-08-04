@@ -149,6 +149,24 @@ export const chatRequests = pgTable(
  * the window rolls over. Postgres-backed so it survives restarts and holds
  * across multiple web instances.
  */
+export const chatClears = pgTable(
+  'chat_clear',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    userId: text('userId')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    roomId: text('roomId').notNull(),
+    clearedAt: timestamp('clearedAt', { mode: 'date' }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('chat_clears_user_room_idx').on(t.userId, t.roomId),
+    index('chat_clears_room_id_idx').on(t.roomId),
+  ]
+);
+
 export const verificationCodes = pgTable(
   'verification_code',
   {
@@ -226,6 +244,7 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Message = typeof messages.$inferSelect;
 export type ChatRequest = typeof chatRequests.$inferSelect;
+export type ChatClear = typeof chatClears.$inferSelect;
 export type Invite = typeof invites.$inferSelect;
 export type VerificationCode = typeof verificationCodes.$inferSelect;
 export type EmailCodeRateLimit = typeof emailCodeRateLimits.$inferSelect;

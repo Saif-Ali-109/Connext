@@ -164,7 +164,6 @@ export default function ChatClient() {
   const prevListRef = useRef<{ count: number; oldestId: string | null }>({ count: 0, oldestId: null });
 
   const otherUserId = userId ? otherUserIdFromRoom(roomId, userId) : null;
-  const hasUndecryptableMessages = messages.some((m) => m.decryptionFailed);
 
   useEffect(() => {
     if (status === 'unauthenticated') router.replace('/login');
@@ -310,15 +309,15 @@ export default function ChatClient() {
     }
   }, [toast]);
 
-  const clearHistory = useCallback(async () => {
-    if (!window.confirm('Clear all messages in this conversation? This can\'t be undone.')) return;
+  const clearChat = useCallback(async () => {
+    if (!window.confirm('Clear this chat for you? The other person keeps their copy of the conversation.')) return;
     try {
       const res = await fetch(
-        `${SERVER_URL}/chat/history/${encodeURIComponent(roomId)}`,
-        { method: 'DELETE', credentials: 'include' }
+        `${SERVER_URL}/chat/clear/${encodeURIComponent(roomId)}`,
+        { method: 'POST', credentials: 'include' }
       );
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to clear history');
+      if (!res.ok) throw new Error(data.error || 'Failed to clear chat');
       setMessages([]);
       messageIdsRef.current.clear();
       readEmittedRef.current.clear();
@@ -326,10 +325,10 @@ export default function ChatClient() {
       pageRef.current = 1;
       prevListRef.current = { count: 0, oldestId: null };
       void loadMessages(1, false);
-      toast.success('Conversation cleared');
+      toast.success('Chat cleared');
     } catch (e) {
       console.error(e);
-      toast.error(e instanceof Error ? e.message : 'Failed to clear history');
+      toast.error(e instanceof Error ? e.message : 'Failed to clear chat');
     }
   }, [roomId, loadMessages, toast]);
 
@@ -873,17 +872,15 @@ export default function ChatClient() {
               </motion.div>
             )}
           </AnimatePresence>
-          {hasUndecryptableMessages && (
-            <button
-              type="button"
-              onClick={() => void clearHistory()}
-              className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-text-muted transition hover:border-red-400/40 hover:text-red-400"
-            >
-              <Trash2 className="h-3 w-3" />
-              Clear history
-            </button>
-          )}
         </div>
+        <button
+          type="button"
+          onClick={() => void clearChat()}
+          title="Clear chat"
+          className="p-1.5 rounded-lg text-text-secondary transition hover:text-red-400"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">

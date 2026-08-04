@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.middleware';
-import { messages } from '@connext/db';
+import { messages, chatClears } from '@connext/db';
 
 function chain() {
   const c: any = {};
-  const methods = ['select', 'from', 'where', 'insert', 'values', 'returning', 'update', 'set', 'delete', 'orderBy', 'limit', 'offset'];
+  const methods = ['select', 'from', 'where', 'insert', 'values', 'returning', 'update', 'set', 'delete', 'orderBy', 'limit', 'offset', 'leftJoin', 'onConflictDoUpdate'];
   for (const m of methods) c[m] = vi.fn(() => c);
   return c;
 }
@@ -16,6 +16,7 @@ mockDb.query = {
   chatRequests: { findFirst: vi.fn() },
   invites: { findFirst: vi.fn() },
   messages: { findFirst: vi.fn() },
+  chatClears: { findFirst: vi.fn() },
 };
 
 vi.mock('../lib/constants', () => ({ getDb: () => mockDb }));
@@ -24,6 +25,7 @@ vi.mock('@connext/db', () => ({
   users: {},
   messages: {},
   chatRequests: {},
+  chatClears: {},
   invites: {},
   getRoomId: vi.fn((a: string, b: string) => [a, b].sort().join('_')),
   isParticipantRoomId: vi.fn((roomId: string, userId: string) =>
@@ -71,7 +73,7 @@ const bob = { id: 'user-2', email: 'b@b.com', name: 'Bob', username: 'bob', disp
 describe('chat controller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    for (const m of ['select', 'from', 'where', 'insert', 'values', 'returning', 'update', 'set', 'delete', 'orderBy', 'limit', 'offset']) {
+    for (const m of ['select', 'from', 'where', 'insert', 'values', 'returning', 'update', 'set', 'delete', 'orderBy', 'limit', 'offset', 'leftJoin', 'onConflictDoUpdate']) {
       mockDb[m].mockReturnValue(mockDb);
     }
   });
@@ -441,6 +443,167 @@ describe('chat controller', () => {
       const res3 = makeRes();
       await getRequests(makeReq(), res3);
       expect(mockDb.select).toHaveBeenCalled();
+    });
+  });
+
+  describe('clearChatForUser', () => {
+    it('returns 401 if no authenticated user', async () => {
+      const { clearChatForUser } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await clearChatForUser(makeReq({ user: undefined }), res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 400 if roomId is not a participant room', async () => {
+      const { clearChatForUser } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await clearChatForUser(makeReq({ params: { roomId: 'user-9_user-3' } }), res);
+      expect(res.status).toHaveBeenCalledWith(400);
+    });
+
+    it('returns 403 if no accepted connection exists for the room', async () => {
+      const { clearChatForUser } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce(null);
+      const res = makeRes();
+      await clearChatForUser(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 if the authenticated user is hidden by their contact', async () => {
+      const { clearChatForUser } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+        hiddenBy: ['user-1'],
+      });
+      const res = makeRes();
+      await clearChatForUser(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it('upserts a chatClears marker without deleting messages on success', async () => {
+      const { clearChatForUser } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+      });
+      const res = makeRes();
+      await clearChatForUser(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+      expect(mockDb.insert).toHaveBeenCalledWith(chatClears);
+      const updater = mockDb.onConflictDoUpdate.mock.calls[0][0];
+      expect(updater).toEqual(
+        expect.objectContaining({
+          target: [chatClears.userId, chatClears.roomId],
+          set: expect.objectContaining({ clearedAt: expect.any(Date) }),
+        })
+      );
+      expect(mockDb.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getMessages', () => {
+    function mockMessagesQuery(resolveValue: unknown[]) {
+      let whereArg: unknown;
+      mockDb.select.mockReturnValueOnce({
+        from: vi.fn().mockReturnValueOnce({
+          where: vi.fn((arg: unknown) => {
+            whereArg = arg;
+            return {
+              orderBy: vi.fn().mockReturnValueOnce({
+                limit: vi.fn().mockReturnValueOnce({
+                  offset: vi.fn().mockResolvedValueOnce(resolveValue),
+                }),
+              }),
+            };
+          }),
+        }),
+      });
+      return () => whereArg;
+    }
+
+    it('returns 401 if no authenticated user', async () => {
+      const { getMessages } = await import('../controllers/chat.controller');
+      const res = makeRes();
+      await getMessages(makeReq({ user: undefined, params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('returns 403 if no accepted connection exists for the room', async () => {
+      const { getMessages } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce(null);
+      const res = makeRes();
+      await getMessages(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('excludes messages at or before the clearedAt marker', async () => {
+      const { getMessages } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+      });
+      const clearedAt = new Date('2024-01-01T00:00:00Z');
+      mockDb.query.chatClears.findFirst.mockResolvedValueOnce({
+        id: 'c1',
+        userId: 'user-1',
+        roomId: 'user-1_user-2',
+        clearedAt,
+      });
+      const getWhereArg = mockMessagesQuery([]);
+      const res = makeRes();
+      await getMessages(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(mockDb.query.chatClears.findFirst).toHaveBeenCalled();
+      expect(sqlContainsValue(getWhereArg(), clearedAt)).toBe(true);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ messages: [], totalCount: 0 }));
+    });
+
+    it('returns messages when no clear marker exists', async () => {
+      const { getMessages } = await import('../controllers/chat.controller');
+      mockDb.query.chatRequests.findFirst.mockResolvedValueOnce({
+        id: 'req-1',
+        fromUserId: 'user-1',
+        toUserId: 'user-2',
+        status: 'accepted',
+      });
+      mockDb.query.chatClears.findFirst.mockResolvedValueOnce(null);
+      const getWhereArg = mockMessagesQuery([
+        {
+          id: 'm1',
+          senderId: 'user-2',
+          content: 'hello',
+          encryptedContent: null,
+          encryptedContentForSender: null,
+          senderKeyFingerprint: null,
+          read: true,
+          reaction: null,
+          reactedByUserId: null,
+          deliveredAt: null,
+          timestamp: new Date('2024-01-02T00:00:00Z'),
+          totalCount: '1',
+        },
+      ]);
+      const res = makeRes();
+      await getMessages(makeReq({ params: { roomId: 'user-1_user-2' } }), res);
+      expect(mockDb.query.chatClears.findFirst).toHaveBeenCalled();
+      expect(sqlContainsValue(getWhereArg(), 'user-1_user-2')).toBe(true);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([expect.objectContaining({ text: 'hello', sender: 'other' })]),
+          totalCount: 1,
+        })
+      );
     });
   });
 });

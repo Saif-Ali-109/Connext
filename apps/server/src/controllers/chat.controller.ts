@@ -1,9 +1,10 @@
 import { Response } from 'express';
-import { and, eq, or, ne, count, desc, inArray, sql } from 'drizzle-orm';
+import { and, eq, or, ne, count, desc, inArray, sql, gt, isNull } from 'drizzle-orm';
 import {
   users,
   messages,
   chatRequests,
+  chatClears,
   invites,
   getRoomId,
   isParticipantRoomId,
@@ -285,6 +286,10 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
   const limitNum = parseInt(req.query.limit as string) || 20;
   const offset = (pageNum - 1) * limitNum;
 
+  const clearRow = await db.query.chatClears.findFirst({
+    where: and(eq(chatClears.userId, authenticatedUserId), eq(chatClears.roomId, roomId)),
+  });
+
   const rows = await db
     .select({
       id: messages.id,
@@ -301,7 +306,7 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
       totalCount: sql<number>`count(*) over()`,
     })
     .from(messages)
-    .where(eq(messages.roomId, roomId))
+    .where(and(eq(messages.roomId, roomId), clearRow ? gt(messages.timestamp, clearRow.clearedAt) : undefined))
     .orderBy(desc(messages.timestamp))
     .limit(limitNum)
     .offset(offset);
@@ -372,6 +377,56 @@ export const clearChatHistory = asyncHandler(async (req: AuthRequest, res: Respo
   invalidateRequestCache(authenticatedUserId, otherId);
 
   await db.delete(messages).where(eq(messages.roomId, roomId));
+  return sendSuccess(res, { ok: true });
+});
+
+export const clearChatForUser = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { roomId } = req.params;
+  const authenticatedUserId = getAuthenticatedUserId(req);
+
+  if (!authenticatedUserId) {
+    return sendError(res, 'Unauthorized: No active session', 401);
+  }
+
+  if (!roomId || !isParticipantRoomId(roomId, authenticatedUserId)) {
+    return sendError(res, 'Invalid Room ID', 400);
+  }
+
+  const parts = roomId.split('_');
+  const otherId = parts.find((p) => p !== authenticatedUserId);
+  if (!otherId) {
+    return sendError(res, 'Invalid Room ID', 400);
+  }
+
+  const db = getDb();
+  const connection = await db.query.chatRequests.findFirst({
+    where: and(
+      or(
+        and(
+          eq(chatRequests.fromUserId, authenticatedUserId),
+          eq(chatRequests.toUserId, otherId)
+        ),
+        and(
+          eq(chatRequests.fromUserId, otherId),
+          eq(chatRequests.toUserId, authenticatedUserId)
+        )
+      ),
+      eq(chatRequests.status, 'accepted')
+    ),
+  });
+
+  if (!connection || isHiddenBy(connection.hiddenBy, authenticatedUserId)) {
+    return sendError(res, 'Forbidden: no accepted connection for this room', 403);
+  }
+
+  await db
+    .insert(chatClears)
+    .values({ userId: authenticatedUserId, roomId, clearedAt: new Date() })
+    .onConflictDoUpdate({
+      target: [chatClears.userId, chatClears.roomId],
+      set: { clearedAt: new Date() },
+    });
+
   return sendSuccess(res, { ok: true });
 });
 
@@ -552,11 +607,13 @@ export const getUnreadMessageCounts = asyncHandler(async (req: AuthRequest, res:
       value: count(),
     })
     .from(messages)
+    .leftJoin(chatClears, and(eq(chatClears.roomId, messages.roomId), eq(chatClears.userId, authenticatedUserId)))
     .where(
       and(
         inArray(messages.roomId, roomIds),
         ne(messages.senderId, authenticatedUserId),
-        eq(messages.read, false)
+        eq(messages.read, false),
+        or(isNull(chatClears.clearedAt), gt(messages.timestamp, chatClears.clearedAt))
       )
     )
     .groupBy(messages.roomId);
@@ -803,10 +860,12 @@ export const searchMessages = asyncHandler(async (req: AuthRequest, res: Respons
       timestamp: messages.timestamp,
     })
     .from(messages)
+    .leftJoin(chatClears, and(eq(chatClears.roomId, messages.roomId), eq(chatClears.userId, authenticatedUserId)))
     .where(
       and(
         inArray(messages.roomId, roomIds),
-        sql`${messages.content} ILIKE ${pattern}`
+        sql`${messages.content} ILIKE ${pattern}`,
+        or(isNull(chatClears.clearedAt), gt(messages.timestamp, chatClears.clearedAt))
       )
     )
     .orderBy(desc(messages.timestamp))
