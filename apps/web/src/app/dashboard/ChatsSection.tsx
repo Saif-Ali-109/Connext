@@ -269,42 +269,39 @@ function ContactRow({
           </div>
         </div>
       </motion.li>
-      <AnimatePresence>
-        {menuOpen && triggerRect &&
-          createPortal(
-            <motion.div
-              ref={dropdownRef}
-              initial={{ opacity: 0, scale: 0.95, y: 4 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 4 }}
-              transition={{ duration: 0.12 }}
-              className="fixed z-50 mb-1 w-44 overflow-hidden rounded-xl border border-border bg-background-secondary shadow-xl"
-              style={{
-                right: window.innerWidth - triggerRect.right,
-                bottom: window.innerHeight - triggerRect.top,
-              }}
+      {menuOpen && triggerRect &&
+        createPortal(
+          <motion.div
+            ref={dropdownRef}
+            initial={{ opacity: 0, scale: 0.95, y: 4 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.12 }}
+            className="fixed z-50 mb-1 w-44 overflow-hidden rounded-xl border border-border bg-background-secondary shadow-xl"
+            style={{
+              right: window.innerWidth - triggerRect.right,
+              bottom: window.innerHeight - triggerRect.top,
+            }}
+          >
+            <button
+              type="button"
+              onClick={startRename}
+              className="w-full px-3 py-2 text-left text-sm text-text-primary transition hover:bg-background-primary"
             >
-              <button
-                type="button"
-                onClick={startRename}
-                className="w-full px-3 py-2 text-left text-sm text-text-primary transition hover:bg-background-primary"
-              >
-                Rename contact
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmingRemove(true);
-                  setMenuOpen(false);
-                }}
-                className="w-full px-3 py-2 text-left text-sm text-red-600 transition hover:bg-background-primary"
-              >
-                Remove contact
-              </button>
-            </motion.div>,
-            document.body
-          )}
-      </AnimatePresence>
+              Rename contact
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmingRemove(true);
+                setMenuOpen(false);
+              }}
+              className="w-full px-3 py-2 text-left text-sm text-red-600 transition hover:bg-background-primary"
+            >
+              Remove contact
+            </button>
+          </motion.div>,
+          document.body
+        )}
     </>
   );
 }
