@@ -1,12 +1,12 @@
 ---
 title: Architecture
-description: How Connext is put together, for quick orientation. For deeper technical notes see documentation.md; for decisions and gotchas see MEMORY.md.
+description: How Connext is put together, for quick orientation. For deeper technical notes see documentation.md.
 ---
 
 # Architecture
 
 How Connext is put together, for quick orientation. For deeper technical notes see
-`documentation.md`; for decisions and gotchas see `MEMORY.md`.
+`documentation.md`.
 
 ## Monorepo layout
 
@@ -68,4 +68,3 @@ packages/
 
 - [README.md](./README.md) — overview, features, and getting started.
 - [documentation.md](./documentation.md) — full technical reference (auth, schema, REST API, sockets, media, env vars).
-- [MEMORY.md](./MEMORY.md) — decisions, conventions, and gotchas.

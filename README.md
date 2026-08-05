@@ -113,8 +113,6 @@ Connext ships with several guides. For more information see the docs below:
 
 - [documentation.md](./documentation.md) — full technical reference: authentication, database schema, REST API, Socket.IO events, media, push notifications, and environment variables.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — high-level system architecture and core flows.
-- [MEMORY.md](./MEMORY.md) — project decisions, conventions, and gotchas.
-- [plan.md](./plan.md), [TODO.md](./TODO.md), [progress.md](./progress.md) — roadmap and progress tracking.
 
 ## License
 
