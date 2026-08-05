@@ -149,12 +149,17 @@ connext/
 │   │       │   ├── login/page.tsx          # Login/signup (3 tabs: password, email, anon)
 │   │       │   ├── login/verify/page.tsx
 │   │       │   ├── dashboard/              # Contact list, profile, requests, security, sidebar
+│   │       │   │   ├── page.tsx
+│   │       │   │   ├── ChatsSection.tsx     # Chat list section
+│   │       │   │   ├── RequestsSection.tsx  # Connection requests + search
+│   │       │   │   ├── ProfileSection.tsx   # Profile + E2E key status
+│   │       │   │   ├── SecuritySection.tsx  # Password / security settings
+│   │       │   │   └── sidebar.tsx          # Dashboard sidebar
 │   │       │   ├── chat/
 │   │       │   │   ├── layout.tsx
 │   │       │   │   ├── page.tsx
 │   │       │   │   ├── ChatClient.tsx      # Live messaging UI
 │   │       │   │   └── [roomId]/page.tsx
-│   │       │   ├── requests/page.tsx       # Connection requests + search
 │   │       │   ├── onboarding/page.tsx     # Post-signup username/password setup
 │   │       │   ├── connect/page.tsx        # Alias for /login
 │   │       │   ├── invite/page.tsx         # Invite link processing
@@ -168,7 +173,11 @@ connext/
 │   │       │   ├── chat/MediaMessage.tsx    # Image/video/audio/file renderer
 │   │       │   └── ui/
 │   │       │       ├── motion.tsx           # Framer Motion primitives
-│   │       │       └── InteractiveBackground.tsx # Animated gradient background
+│   │       │       ├── InteractiveBackground.tsx # Animated gradient background
+│   │       │       ├── EmojiPicker.tsx      # Reaction emoji picker
+│   │       │       ├── Toast.tsx            # Toast notifications
+│   │       ├── hooks/
+│   │       │   └── useOutsideClick.ts       # Click-outside detection hook
 │   │       ├── lib/
 │   │       │   ├── api.ts                  # Server URL + headers
 │   │       │   ├── clipboard.ts            # Copy utility
@@ -200,6 +209,7 @@ connext/
 │           │   ├── messaging.ts            # send_message, message_delivered, message_read
 │           │   ├── presence.ts             # user_online / user_offline
 │           │   ├── rooms.ts               # join_room resolution
+│           │   ├── reactions.ts           # react_message / message_reaction
 │           │   ├── typing.ts              # typing_start / typing_stop
 │           │   └── types.ts               # SocketDeps interface
 │           ├── middleware/
@@ -264,7 +274,7 @@ The `authorize` callback:
 Custom `sendVerificationRequest` sends codes via Brevo HTTPS API (not SMTP):
 - Generates 6-digit code: `crypto.randomInt(0, 1_000_000).toString().padStart(6, '0')`
 - Code expires in 10 minutes (`maxAge: 600`)
-- Rate limit: max 10 codes per email per 10-minute window (backed by `email_code_rate_limits` table)
+- Rate limit: max 10 codes per email per 10-minute window (backed by `email_code_rate_limit` table)
 - Email validation: rejects sub-addressed (+tag) emails
 - 10-second timeout via `AbortController`
 - Uses `codeGoal` parameter to distinguish signup (`/onboarding`) vs recovery (`/reset-password`)
@@ -364,6 +374,7 @@ Core identity table, shared with Auth.js adapter.
 | `avatarUrl` | `text` | nullable | Custom avatar URL override |
 | `fcmToken` | `text` | nullable | Firebase Cloud Messaging token |
 | `publicKey` | `text` | nullable | E2EE public key (base64) |
+| `keyFingerprint` | `text` | nullable | SHA-256 fingerprint of the E2EE public key |
 | `lastSeenAt` | `timestamp` | default `now()` | Updated on bridge session |
 | `createdAt` | `timestamp` | not null, default `now()` | |
 | `updatedAt` | `timestamp` | not null, default `now()` | |
@@ -432,6 +443,9 @@ Chat message history. Supports both plaintext (`content`) and E2EE (`encryptedCo
 | `content` | `text` | nullable | Plaintext content |
 | `encryptedContent` | `text` | nullable | E2EE ciphertext for recipient |
 | `encryptedContentForSender` | `text` | nullable | E2EE ciphertext for sender's own history |
+| `senderKeyFingerprint` | `text` | nullable | Fingerprint of the sender's key used to encrypt |
+| `reaction` | `text` | nullable | Single-slot emoji reaction on this message |
+| `reactedByUserId` | `text` | nullable | FK → users.id (ON DELETE SET NULL); who reacted |
 | `read` | `boolean` | not null | `false` |
 | `deliveredAt` | `timestamp` | nullable | Set on delivery acknowledgment |
 | `timestamp` | `timestamp` | not null | `now()` |
@@ -476,6 +490,18 @@ Sliding-window rate limiter for email verification codes.
 | `count` | `integer` | not null | `0` |
 | `windowStart` | `timestamp` | not null | `now()` |
 
+### chat_clear
+Per-user "clear chat" markers (a user's own cutoff for hiding older messages).
+
+| Column | Type | Constraints | Default |
+|--------|------|-------------|---------|
+| `id` | `text` | PK, UUID | `randomUUID()` |
+| `userId` | `text` | not null, FK → users.id ON DELETE CASCADE | |
+| `roomId` | `text` | not null | Room ID |
+| `clearedAt` | `timestamp` | not null | `now()` |
+
+Unique index: `chat_clears_user_room_idx` on `(userId, roomId)`; index on `roomId`.
+
 ### Indexes
 - `messages`: indexed on `roomId`, `(roomId, timestamp)`, `senderId`, `(roomId, read)`, and a GIN trigram index on `content` for full-text search
 - `chat_requests`: unique index on `(fromUserId, toUserId)`, index on `status`
@@ -498,13 +524,14 @@ type ChatRequest     = typeof chatRequests.$inferSelect
 type Invite          = typeof invites.$inferSelect
 type VerificationCode = typeof verificationCodes.$inferSelect
 type EmailCodeRateLimit = typeof emailCodeRateLimits.$inferSelect
+type ChatClear       = typeof chatClears.$inferSelect
 ```
 
 ---
 
 ## REST API Reference
 
-All Express endpoints are prefixed (no prefix used — routes are flat). All authenticated routes require the `token` httpOnly cookie set by the bridge flow.
+Express routes are mounted flat (no `/api` prefix): `/auth/*`, `/chat/*`, `/media/*`, `/notifications/*`, and `/health`. All authenticated routes require the `token` httpOnly cookie set by the bridge flow.
 
 ### Auth Routes (`/routes/auth.ts`)
 
@@ -518,6 +545,11 @@ All Express endpoints are prefixed (no prefix used — routes are flat). All aut
 | POST | `/auth/fcm-token` | Yes | `updateFcmToken` | Register FCM push token |
 | GET | `/auth/user/:query` | Yes | `getUserByQuery` | Search user by ID, username, or email |
 | GET | `/auth/search?q=` | Yes | `getUserByQuery` | Search users by query string |
+| POST | `/auth/send-verification` | Yes | `sendVerificationEmail` | Send a 6-digit email verification code (10-min expiry, max 3 per 10 min) |
+| POST | `/auth/verify-email` | Yes | `verifyEmail` | Verify a 6-digit code; sets `email` + `emailVerified` |
+| GET | `/auth/token` | Yes | `getToken` | Return the raw JWT cookie value |
+| POST | `/auth/public-key` | Yes | `uploadPublicKey` | Upload E2EE public key (SPKI DER base64) with proof-of-possession signature |
+| GET | `/auth/key-status` | Yes | `getKeyStatus` | Return `{ publicKey, fingerprint }` for E2EE key status |
 
 **POST `/auth/username`** request body:
 ```json
@@ -549,6 +581,12 @@ All fields optional. Password required when claiming a first-time username.
 | GET | `/chat/requests` | Yes | `getRequests` | Get incoming, outgoing, contacts |
 | DELETE | `/chat/request/:requestId` | Yes | `removeRequest` | Delete a pending request |
 | GET | `/chat/messages/:roomId` | Yes | `getMessages` | Paginated message history |
+| POST | `/chat/react` | Yes | `toggleReaction` | Toggle a single-slot emoji reaction on a message |
+| DELETE | `/chat/history/:roomId` | Yes | `clearChatHistory` | Delete all messages in a room for both users |
+| POST | `/chat/clear/:roomId` | Yes | `clearChatForUser` | Clear chat for the current user only (server-side `chatClears` marker) |
+| GET | `/chat/connection/:roomId` | Yes | `getConnectionStatus` | Get `{ connection: { status, hiddenBy } \| null }` |
+| POST | `/chat/reconnect` | Yes | `reconnectChat` | Reset a hidden connection to `pending` and clear `hiddenBy` |
+| GET | `/chat/search` | Yes | `searchMessages` | Search message content across accepted rooms (limit 20) |
 | POST | `/chat/send-message` | Yes | `sendMessage` | Send message via REST |
 | GET | `/chat/unreadCounts` | Yes | `getUnreadMessageCounts` | Unread counts per contact |
 | PUT | `/chat/contact-name` | Yes | `updateContactName` | Set custom name for a contact |
@@ -589,6 +627,12 @@ Status is `accepted` or `rejected`.
 }
 ```
 `deliveryState` is one of `"sent"`, `"delivered"`, `"read"`. Messages the requesting user sent are marked as `"read"` in their own view.
+
+**POST `/chat/react`** request body:
+```json
+{ "messageId": "...", "emoji": "👍" }
+```
+Only the message recipient can react. Toggling the same emoji removes it; a different emoji replaces it. The socket event `react_message` is the primary path; this REST endpoint mirrors it.
 
 **PUT `/chat/contact-name`** request body:
 ```json
@@ -693,11 +737,12 @@ On disconnect:
 | Event | Payload | Behavior |
 |-------|---------|----------|
 | `join_room` | `string \| { roomId, otherIdentifier? }` | Join a Socket.IO room by roomId or resolve from otherIdentifier. Emits `room_joined: { roomId }` on success |
-| `send_message` | `{ messageId, recipientUserId, recipientPublicKey?, content?, encryptedContent?, encryptedContentForSender? }` | Validates rate limit (500ms cooldown per socket), checks accepted connection, persists to DB. Emits `receive_message` to recipient's rooms and socket channels. Emits `message_delivery_status` to sender. Supports both plaintext and E2EE payloads |
+| `send_message` | `{ messageId, recipientUserId, recipientPublicKey?, content?, encryptedContent?, encryptedContentForSender?, senderKeyFingerprint? }` | Validates rate limit (500ms cooldown per socket), checks accepted connection, persists to DB. Emits `receive_message` to recipient's rooms and socket channels. Emits `message_delivery_status` to sender. Supports both plaintext and E2EE payloads |
 | `message_delivered` | `{ roomId, messageId }` | Updates `deliveredAt` in DB. Emits `message_delivered_relay: { messageId }` to sender's sockets |
 | `message_read` | `{ roomId, messageId }` | Sets `read = true` in DB. Emits `message_read_relay: { messageId }` to sender's sockets |
 | `typing_start` | `{ roomId }` | Broadcasts `user_typing: { userId, roomId }` to room |
 | `typing_stop` | `{ roomId }` | Broadcasts `user_stopped_typing: { userId, roomId }` to room |
+| `react_message` | `{ messageId, emoji }` | Toggle reaction (250ms throttle). Emits `message_reaction` to room + both user rooms |
 | `disconnect` | — | Cleanup, emit `user_offline` |
 
 ### Server → Client Events
@@ -707,12 +752,14 @@ On disconnect:
 | `user_online` | `{ userId }` | User connected |
 | `user_offline` | `{ userId }` | User disconnected (all sockets gone) |
 | `room_joined` | `{ roomId }` | `join_room` succeeded |
-| `receive_message` | `{ id, sender, roomId, content, encryptedContent, encryptedContentForSender, createdAt }` | New message from peer |
+| `receive_message` | `{ id, sender, roomId, content, encryptedContent, encryptedContentForSender, senderKeyFingerprint, createdAt }` | New message from peer |
 | `message_delivery_status` | `{ recipientUserId, messageId, delivered }` | Acknowledgement that recipient received the message |
 | `message_delivered_relay` | `{ messageId }` | Peer confirmed delivery |
 | `message_read_relay` | `{ messageId }` | Peer read the message |
 | `user_typing` | `{ userId, roomId }` | Peer started typing |
 | `user_stopped_typing` | `{ userId, roomId }` | Peer stopped typing |
+| `message_reaction` | `{ messageId, emoji, userId, action, roomId }` | A reaction was added (`added`), changed (`changed`), or removed (`removed`) |
+| `key_updated` | `{ userId }` | A contact rotated their E2EE public key |
 
 ### Room ID Convention
 
@@ -730,7 +777,7 @@ Example: `"a1b2c3_d4e5f6"` — consistent regardless of who initiates.
 ### Rate Limiting
 
 - Message send: 500ms cooldown per socket (in-memory `Map<socketId, timestamp>`)
-- REST API: IP-based limiter (100 requests/minute default) via `express-rate-limit` + in-memory fallback
+- REST API: global limiter (200 requests / 15 min / IP) on `/auth`, `/chat`, `/media`; 30 requests / 1 min / IP on `/notifications`; plus per-endpoint limiters (e.g. 60 messages/min, 60 reactions/min, 3 password changes / 10 min) via `express-rate-limit`
 
 ### Internal State
 
