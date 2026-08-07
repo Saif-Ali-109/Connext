@@ -28,9 +28,9 @@ export default function OnboardingPage() {
     if (status === 'unauthenticated') router.replace('/login');
   }, [status, router]);
 
-  // Fully set up (username + password) — nothing to do here.
+  // Already has a username — nothing to do here (Google users have no password).
   useEffect(() => {
-    if (ready && profile?.username && profile?.hasPassword) router.replace('/dashboard');
+    if (ready && profile?.username) router.replace('/dashboard');
   }, [ready, profile, router]);
 
   // Pre-fill the username for accounts that have one but still need a password.
