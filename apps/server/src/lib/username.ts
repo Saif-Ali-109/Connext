@@ -15,13 +15,22 @@ const MAX_LEN = 24;
  */
 export function sanitizeUsernameBase(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  const s = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_') // drop the @-tail, dots, plus tags; runs collapse to one _
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  if (!s) return null;
-  return s.slice(0, MAX_LEN);
+  let out = '';
+  let lastWasUnderscore = false;
+  for (let i = 0; i < raw.length && out.length < MAX_LEN; i++) {
+    const ch = raw[i].toLowerCase();
+    if (ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9') {
+      out += ch;
+      lastWasUnderscore = false;
+    } else if (!lastWasUnderscore && out.length > 0) {
+      // Skip leading separators; collapse interior runs to a single underscore.
+      out += '_';
+      lastWasUnderscore = true;
+    }
+  }
+  // Trim trailing underscore
+  if (out.endsWith('_')) out = out.slice(0, -1);
+  return out || null;
 }
 
 /** Grow a nonempty base up to the 3-char minimum, then clamp to the max. */
