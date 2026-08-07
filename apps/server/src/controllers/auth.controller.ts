@@ -9,6 +9,7 @@ import { sendEmail } from '../lib/email';
 import { asyncHandler } from '../lib/asyncHandler';
 import { sendSuccess, sendError } from '../lib/response';
 import { publicUser } from '../lib/user';
+import { generateUniqueUsername } from '../lib/username';
 import crypto from 'crypto';
 
 function setAuthCookie(res: Response, user: { id: string; email?: string | null; name?: string | null }) {
@@ -41,18 +42,40 @@ export const bridgeSession = asyncHandler(async (req: AuthRequest, res: Response
 
   let user = existing;
   if (!user) {
-    const [created] = await db
-      .insert(users)
-      .values({
-        id: payload.userId,
-        email: payload.email ?? null,
-        name: payload.name ?? null,
-        image: payload.image ?? null,
-        displayName: payload.name ?? null,
-        avatarUrl: payload.image ?? null,
-      })
-      .returning();
-    user = created;
+    // Google users arrive here with no username. Auto-assign a unique one so they
+    // skip onboarding entirely (they never set a password — Google-only sign-in).
+    const insertUser = async () => {
+      const username = await generateUniqueUsername(db, {
+        email: payload.email,
+        name: payload.name,
+      });
+      const [created] = await db
+        .insert(users)
+        .values({
+          id: payload.userId,
+          email: payload.email ?? null,
+          name: payload.name ?? null,
+          image: payload.image ?? null,
+          displayName: payload.name ?? null,
+          avatarUrl: payload.image ?? null,
+          username,
+        })
+        .returning();
+      return created;
+    };
+
+    try {
+      user = await insertUser();
+    } catch (err) {
+      if (err && typeof err === 'object' && 'code' in err && (err as { code?: string }).code === '23505') {
+        // Either a concurrent bridge already created this exact user (same id —
+        // adopt it) or another user grabbed the generated handle (regenerate).
+        const now = await db.query.users.findFirst({ where: eq(users.id, payload.userId) });
+        user = now ?? (await insertUser());
+      } else {
+        throw err;
+      }
+    }
   } else {
     const dataChanged =
       (payload.email ?? null) !== user.email ||
@@ -61,24 +84,54 @@ export const bridgeSession = asyncHandler(async (req: AuthRequest, res: Response
     const lastSeenStale =
       !user.lastSeenAt ||
       Date.now() - user.lastSeenAt.getTime() > 60_000;
+    // Backfill for Google users created before auto-username existed, so they get
+    // unstuck from the onboarding loop on their next request. Idempotent otherwise.
+    const usernameMissing = !user.username;
 
-    if (dataChanged || lastSeenStale) {
-      const setFields: Record<string, unknown> = {};
-      if (dataChanged) {
-        setFields.email = payload.email ?? user.email;
-        setFields.name = payload.name ?? user.name;
-        setFields.image = payload.image ?? user.image;
-        setFields.updatedAt = new Date();
+    if (dataChanged || lastSeenStale || usernameMissing) {
+      const buildSetFields = async () => {
+        const setFields: Record<string, unknown> = {};
+        if (dataChanged) {
+          setFields.email = payload.email ?? user!.email;
+          setFields.name = payload.name ?? user!.name;
+          setFields.image = payload.image ?? user!.image;
+          setFields.updatedAt = new Date();
+        }
+        if (lastSeenStale) {
+          setFields.lastSeenAt = new Date();
+        }
+        if (usernameMissing) {
+          setFields.username = await generateUniqueUsername(db, {
+            email: payload.email ?? user!.email,
+            name: payload.name ?? user!.name,
+          });
+          setFields.updatedAt = new Date();
+        }
+        return setFields;
+      };
+
+      const runUpdate = async () => {
+        const [updated] = await db
+          .update(users)
+          .set(await buildSetFields())
+          .where(eq(users.id, user!.id))
+          .returning();
+        return updated;
+      };
+
+      try {
+        user = await runUpdate();
+      } catch (err) {
+        if (
+          usernameMissing &&
+          err && typeof err === 'object' && 'code' in err &&
+          (err as { code?: string }).code === '23505'
+        ) {
+          user = await runUpdate();
+        } else {
+          throw err;
+        }
       }
-      if (lastSeenStale) {
-        setFields.lastSeenAt = new Date();
-      }
-      const [updated] = await db
-        .update(users)
-        .set(setFields)
-        .where(eq(users.id, user.id))
-        .returning();
-      user = updated;
     }
   }
 
@@ -141,7 +194,10 @@ export const updateUsername = asyncHandler(async (req: AuthRequest, res: Respons
       where: eq(users.id, req.user.id),
     });
     let passwordHash: string | undefined;
-    if (!existing?.passwordHash) {
+    // A password is only required for a first-time username set with no password
+    // (the manual email-signup onboarding path). Google users already have a
+    // username (auto-assigned at bridge time) and can rename without a password.
+    if (!existing?.passwordHash && !existing?.username) {
       if (!password || password.length < 8) {
         return sendError(res, 'Password must be at least 8 characters', 400);
       }

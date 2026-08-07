@@ -175,9 +175,11 @@ function BridgeSession({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Force through onboarding until they have both a username and a password.
+    // Force through onboarding until they have a username. Google users get one
+    // auto-assigned at bridge time, so they skip straight to the app; password is
+    // optional (Google sign-in) and no longer gates entry.
     if (PUBLIC_PATHS.includes(pathname)) return;
-    if (!profile.username || !profile.hasPassword) {
+    if (!profile.username) {
       router.replace('/onboarding');
     }
   }, [ready, profile, pathname, router]);
