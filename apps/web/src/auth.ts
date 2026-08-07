@@ -197,6 +197,14 @@ if (process.env.BREVO_API_KEY) {
   );
 }
 
+// In production the app sits behind Railway's TLS proxy: the browser is on HTTPS
+// but the Node process sees plain HTTP. Left to its own detection, Auth.js writes
+// the OAuth PKCE/state cookies without the `__Secure-` prefix on the way out and
+// then looks for the prefixed names on the callback — the mismatch is what throws
+// `pkceCodeVerifier value could not be parsed`. Pinning secure cookies keeps both
+// halves of the flow in agreement. Dev over http://localhost stays on the defaults.
+const isProd = process.env.NODE_ENV === 'production';
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: db
     ? DrizzleAdapter(db, {
@@ -208,6 +216,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     : undefined,
   // JWT sessions are required for the Credentials (password) provider.
   session: { strategy: 'jwt' },
+  useSecureCookies: isProd,
+  cookies: isProd
+    ? {
+        pkceCodeVerifier: {
+          name: '__Secure-authjs.pkce.code_verifier',
+          options: { httpOnly: true, sameSite: 'lax', path: '/', secure: true },
+        },
+        state: {
+          name: '__Secure-authjs.state',
+          options: { httpOnly: true, sameSite: 'lax', path: '/', secure: true },
+        },
+        nonce: {
+          name: '__Secure-authjs.nonce',
+          options: { httpOnly: true, sameSite: 'lax', path: '/', secure: true },
+        },
+        callbackUrl: {
+          name: '__Secure-authjs.callback-url',
+          options: { httpOnly: true, sameSite: 'lax', path: '/', secure: true },
+        },
+      }
+    : undefined,
   providers,
   pages: {
     signIn: '/login',
